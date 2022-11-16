@@ -195,7 +195,7 @@ public class ImportService {
 
 		final FullImportComponentFactoryImpl importComponentFactory = getFullImportComponentFactory(branchPath);
 		try {
-			releaseImporter.loadFullReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory);
+			releaseImporter.loadFullReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory, true);
 			return null;
 		} catch (ReleaseImportException e) {
 			rollbackIncompleteCommit(importComponentFactory);
@@ -210,7 +210,7 @@ public class ImportService {
 		final ImportComponentFactoryImpl importComponentFactory =
 				getImportComponentFactory(branchPath, patchReleaseVersion, !job.isCreateCodeSystemVersion(), job.isClearEffectiveTimes());
 		try {
-			releaseImporter.loadSnapshotReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory);
+			releaseImporter.loadSnapshotReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory, true);
 			return importComponentFactory.getMaxEffectiveTime();
 		} catch (ReleaseImportException e) {
 			rollbackIncompleteCommit(importComponentFactory);
@@ -225,7 +225,7 @@ public class ImportService {
 		final ImportComponentFactoryImpl importComponentFactory =
 				getImportComponentFactory(branchPath, patchReleaseVersion, !job.isCreateCodeSystemVersion(), job.isClearEffectiveTimes());
 		try {
-			releaseImporter.loadDeltaReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory);
+			releaseImporter.loadDeltaReleaseFiles(releaseFileStream, loadingProfile, importComponentFactory, true);
 			return importComponentFactory.getMaxEffectiveTime();
 		} catch (ReleaseImportException e) {
 			rollbackIncompleteCommit(importComponentFactory);

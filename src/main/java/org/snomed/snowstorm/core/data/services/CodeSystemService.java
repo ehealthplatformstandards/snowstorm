@@ -51,9 +51,7 @@ import static io.kaicode.elasticvc.api.ComponentService.LARGE_PAGE;
 import static java.lang.String.format;
 import static org.elasticsearch.index.query.QueryBuilders.*;
 import static org.snomed.snowstorm.config.Config.DEFAULT_LANGUAGE_CODES;
-import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.PREVIOUS_PACKAGE;
-import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.PREVIOUS_RELEASE;
-import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.PREVIOUS_DEPENDENCY_PACKAGE;
+import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.*;
 
 @Service
 public class CodeSystemService {
@@ -163,6 +161,9 @@ public class CodeSystemService {
 					newCodeSystem.setDependantVersionEffectiveTime(latestVersion.getEffectiveDate());
 				}
 			}
+		} else if (newCodeSystem.isPostcoordinated() == Boolean.TRUE) {
+			throw new IllegalArgumentException("Postcoordination is not possible on the root code system. " +
+					"Please create a child code system that depends on the precoordinated content in the parent code system.");
 		}
 		Integer dependantVersionEffectiveTime = newCodeSystem.getDependantVersionEffectiveTime();
 		boolean branchExists = branchService.exists(branchPath);

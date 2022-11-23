@@ -20,6 +20,7 @@ import org.snomed.snowstorm.fhir.config.FHIRConstants;
 import org.snomed.snowstorm.fhir.domain.FHIRCodeSystemVersion;
 import org.snomed.snowstorm.fhir.domain.FHIRConceptMap;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -28,6 +29,9 @@ import static org.snomed.snowstorm.core.util.CollectionUtils.orEmpty;
 
 @Service
 public class FHIRTermCodeSystemStorage implements ITermCodeSystemStorageSvc {
+
+	@Value("${snowstorm.rest-api.readonly}")
+	private boolean readOnlyMode;
 
 	@Autowired
 	private FHIRCodeSystemService fhirCodeSystemService;
@@ -60,12 +64,13 @@ public class FHIRTermCodeSystemStorage implements ITermCodeSystemStorageSvc {
 	public IIdType storeNewCodeSystemVersion(CodeSystem codeSystem, TermCodeSystemVersion termCodeSystemVersion, RequestDetails requestDetails,
 			List<ValueSet> valueSets, List<ConceptMap> conceptMaps) {
 
+		FHIRHelper.readOnlyCheck(readOnlyMode);
 		FHIRCodeSystemVersion codeSystemVersion;
 		codeSystem.setContent(CodeSystem.CodeSystemContentMode.COMPLETE);
 		if (codeSystem.getUrl().startsWith(FHIRConstants.ICD10_URI)) {
 			codeSystem.setHierarchyMeaning(CodeSystem.CodeSystemHierarchyMeaning.ISA);
 		}
-		codeSystemVersion = fhirCodeSystemService.save(codeSystem);
+		codeSystemVersion = fhirCodeSystemService.createUpdate(codeSystem);
 		fhirConceptService.saveAllConceptsOfCodeSystemVersion(termCodeSystemVersion, codeSystemVersion);
 
 		valueSets = orEmpty(valueSets);

@@ -13,7 +13,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	private CodeSystemService codeSystemService;
 
 	@Test
-	void createCodeSystems() {
+	void createCodeSystems() throws ServiceException {
 		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN").setOwner("SNOMED International"));
 
 		assertEquals(1, codeSystemService.findAll().size());
@@ -27,7 +27,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void createCodeSystemWithBadBranchPath() {
+	void createCodeSystemWithBadBranchPath() throws ServiceException {
 		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
 		assertEquals(1, codeSystemService.findAll().size());
 		CodeSystem codeSystemBe = new CodeSystem("SNOMEDCT-TEST", "MAIN.TEST");
@@ -41,14 +41,14 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void createPostcoordinatedCodeSystem() {
+	void createPostcoordinatedCodeSystem() throws ServiceException {
 		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
 		CodeSystem codeSystemPCE = new CodeSystem("SNOMEDCT-PCETEST", "MAIN/PCETEST").setMaximumPostcoordinationLevel((short) 1);
 		codeSystemService.createCodeSystem(codeSystemPCE);
 	}
 
 	@Test
-	void testFindLatestImportedVersion() {
+	void testFindLatestImportedVersion() throws ServiceException {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 		codeSystemService.createVersion(codeSystem, 20190731, "");
@@ -64,7 +64,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void testFindInternalVersion() {
+	void testFindInternalVersion() throws ServiceException {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 
@@ -83,7 +83,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void testFindLatestEffectiveVersion() {
+	void testFindLatestEffectiveVersion() throws ServiceException {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 		codeSystemService.createVersion(codeSystem, 20190131, "");

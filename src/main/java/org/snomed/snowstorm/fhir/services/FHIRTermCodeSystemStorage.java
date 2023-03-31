@@ -1,6 +1,5 @@
 package org.snomed.snowstorm.fhir.services;
 
-import ca.uhn.fhir.jpa.entity.TermCodeSystem;
 import ca.uhn.fhir.jpa.entity.TermCodeSystemVersion;
 import ca.uhn.fhir.jpa.entity.TermConcept;
 import ca.uhn.fhir.jpa.model.entity.ResourceTable;
@@ -8,7 +7,7 @@ import ca.uhn.fhir.jpa.term.UploadStatistics;
 import ca.uhn.fhir.jpa.term.api.ITermCodeSystemStorageSvc;
 import ca.uhn.fhir.jpa.term.custom.CustomTerminologySet;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
-import ca.uhn.fhir.rest.api.server.storage.ResourcePersistentId;
+import ca.uhn.fhir.rest.api.server.storage.IResourcePersistentId;
 import org.hl7.fhir.instance.model.api.IIdType;
 import org.hl7.fhir.r4.model.CodeSystem;
 import org.hl7.fhir.r4.model.ConceptMap;
@@ -25,7 +24,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.util.List;
 
 import static org.snomed.snowstorm.core.util.CollectionUtils.orEmpty;
@@ -51,16 +49,15 @@ public class FHIRTermCodeSystemStorage implements ITermCodeSystemStorageSvc {
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
 	@Override
-	public void deleteCodeSystem(TermCodeSystem termCodeSystem) {
-	}
-
-	@Override
-	public void deleteCodeSystemVersion(TermCodeSystemVersion termCodeSystemVersion) {
+	public void storeNewCodeSystemVersion(IResourcePersistentId theCodeSystemResourcePid, String theSystemUri, String theSystemName,
+			String theSystemVersionId, TermCodeSystemVersion theCodeSystemVersion, ResourceTable theCodeSystemResourceTable,
+			RequestDetails theRequestDetails) {
 
 	}
 
 	@Override
-	public void storeNewCodeSystemVersion(ResourcePersistentId resourcePersistentId, String s, String s1, String s2, TermCodeSystemVersion termCodeSystemVersion, ResourceTable resourceTable, RequestDetails requestDetails) {
+	public void storeNewCodeSystemVersion(IResourcePersistentId theCodeSystemResourcePid, String theSystemUri, String theSystemName, String theSystemVersionId, TermCodeSystemVersion theCodeSystemVersion, ResourceTable theCodeSystemResourceTable) {
+		ITermCodeSystemStorageSvc.super.storeNewCodeSystemVersion(theCodeSystemResourcePid, theSystemUri, theSystemName, theSystemVersionId, theCodeSystemVersion, theCodeSystemResourceTable);
 	}
 
 	@Override
@@ -117,8 +114,4 @@ public class FHIRTermCodeSystemStorage implements ITermCodeSystemStorageSvc {
 		return 0;
 	}
 
-	@Override
-	public ResourcePersistentId getValueSetResourcePid(IIdType iIdType) {
-		return null;
-	}
 }

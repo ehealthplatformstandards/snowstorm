@@ -3,6 +3,25 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## SnowstormX 8.3.0 Beta Release (April 2023)
+This beta release introduces SNOMED CT postcoordination support in the FHIR API. 
+
+This is the reference implementation to accompany the newly published [SNOMED CT Practical Guide to Postcoordination](http://snomed.org/postcoordination) from SNOMED International.
+
+### Features
+- SNOMED CT postcoordination support
+  - Validate SNOMED CT postcoordinated expressions
+    - Check the syntax and [Machine Readable Concept Model](https://browser.ihtsdotools.org/mrcm) rules
+  - Transform common expressions to an MRCM compliant and classifiable form
+  - Test subsumption with postcoordinated expressions using incremental classification
+  - Build an expression repository using a FHIR code system supplement
+    - ECL support
+    - Expression repository uses expression refsets and other RF2 structures to support backup and restore
+ 
+_See new SnowstormX Postman collection that includes postcoordination examples:_ 
+
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://god.gw.postman.com/run-collection/6085828-38d13887-bb38-4b49-a058-c623a0d260e7?action=collection%2Ffork&collection-url=entityId%3D6085828-38d13887-bb38-4b49-a058-c623a0d260e7%26entityType%3Dcollection%26workspaceId%3D283ac96f-72e6-436f-9f4b-c67af5d038a8)
+
 
 ## 8.1.0 Release (March 2023)
 This release has an overhaul of the FHIR API :fire: and adds support for multiple code systems within the FHIR API!

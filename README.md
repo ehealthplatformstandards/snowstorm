@@ -1,6 +1,6 @@
 ![Snowstorm Terminology Server](docs/images/SNOWSTORM-logo.svg)
 
-[![Build Status](https://travis-ci.org/IHTSDO/snowstorm.svg?branch=master)](https://travis-ci.org/IHTSDO/snowstorm) [![Language grade: Java](https://img.shields.io/lgtm/grade/java/g/IHTSDO/snowstorm.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/IHTSDO/snowstorm/context:java) [![codecov](https://codecov.io/gh/IHTSDO/snowstorm/branch/master/graph/badge.svg)](https://codecov.io/gh/IHTSDO/snowstorm)
+[![Build Status](https://travis-ci.org/IHTSDO/snowstorm.svg?branch=master)](https://travis-ci.org/IHTSDO/snowstorm)
 [![Docker](https://img.shields.io/docker/pulls/snomedinternational/snowstorm)](https://hub.docker.com/r/snomedinternational/snowstorm)
 
 **This is the Snowstorm-X project, a beta version of [Snowstorm](https://github.com/IHTSDO/snowstorm) with the latest implementation-focused features and enhancements. Please be aware these features have not yet been fully tested.**

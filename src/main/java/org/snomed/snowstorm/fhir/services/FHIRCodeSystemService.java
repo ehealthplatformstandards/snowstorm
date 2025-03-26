@@ -45,7 +45,6 @@ import java.util.*;
 
 import static java.lang.String.format;
 import static org.snomed.snowstorm.core.util.SearchAfterQueryHelper.updateQueryWithSearchAfter;
-import static org.snomed.snowstorm.fhir.services.FHIRHelper.createOperationOutcomeWithIssues;
 import static org.snomed.snowstorm.fhir.services.FHIRHelper.exception;
 import static org.snomed.snowstorm.fhir.utils.FHIRPageHelper.toPage;
 
@@ -648,6 +647,7 @@ public class FHIRCodeSystemService {
 	}
 
 	public Page<FHIRCodeSystemVersion> find(PageRequest pageRequest, Query query) {
+		//TODO [2/04/2025 - js]: to investigate - causes an elasticsearch exception sometimes (and response code 500)
 		NativeQuery searchQuery = new NativeQueryBuilder()
 				.withQuery(query)
 				.withPageable(pageRequest)

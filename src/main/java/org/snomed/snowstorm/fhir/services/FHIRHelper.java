@@ -590,4 +590,28 @@ public class FHIRHelper implements FHIRConstants {
 	public static String toString(StringType string) {
 		return string != null ? string.getValue() : null;
 	}
+
+	public static boolean checkIfVersionExistsIn(CodeableConcept codeableConcept) {
+		return codeableConcept.getCoding() != null &&
+				codeableConcept.getCoding().stream()
+						.findFirst()
+						.map(Coding::getVersion)
+						.isPresent();
+	}
+
+	public static boolean checkIfVersionExistsIn(Coding coding) {
+		return coding.getVersion() != null;
+	}
+
+	public static boolean checkIfDisplayExistsIn(CodeableConcept codeableConcept) {
+		return codeableConcept.getCoding() != null &&
+				codeableConcept.getCoding().stream()
+						.findFirst()
+						.map(Coding::getDisplay)
+						.isPresent();
+	}
+
+	public static CodeableConcept getIssueDetailsFrom(Parameters.ParametersParameterComponent operationOutcomeParameter) {
+		return ((OperationOutcome.OperationOutcomeIssueComponent) operationOutcomeParameter.getResource().getChildByName("issue").getValues().get(0)).getDetails();
+	}
 }

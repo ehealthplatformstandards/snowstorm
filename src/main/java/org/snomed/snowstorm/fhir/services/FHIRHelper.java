@@ -47,6 +47,7 @@ public class FHIRHelper implements FHIRConstants {
     private static final Pattern SNOMED_URI_MODULE_AND_VERSION_PATTERN = Pattern.compile("http://snomed.info/x?sct/(\\d+)/version/([\\d]{8})");
     private static final Pattern SCT_ID_PATTERN = Pattern.compile("sct_(\\d)+_(\\d){8}");
     protected static final String DEFAULT_DISPLAY_ISSUE_TEXT = "Contains all of [Anzeige 1] (because no external string provided for 1)";
+    protected static final String CUSTOM_DISPLAY_ISSUE_TEXT = "Contains all of [xxxxx] (because no external string provided for 1)";
     public static int DEFAULT_PAGESIZE = 1_000;
 
     @Autowired
@@ -600,30 +601,12 @@ public class FHIRHelper implements FHIRConstants {
 
     public static boolean checkIfVersionExistsIn(CodeableConcept codeableConcept) {
         return codeableConcept.getCoding() != null &&
-                codeableConcept.getCoding().stream()
-                        .findFirst()
-                        .map(Coding::getVersion)
-                        .isPresent();
-    }
-
-    public static boolean checkIfVersionExistsIn(Coding coding) {
-        return coding.getVersion() != null;
+                codeableConcept.getCoding().stream().anyMatch(FHIRHelper::hasVersion);
     }
 
     public static boolean checkIfDisplayExistsIn(CodeableConcept codeableConcept) {
         return codeableConcept.getCoding() != null &&
-                codeableConcept.getCoding().stream()
-                        .findFirst()
-                        .map(Coding::getDisplay)
-                        .isPresent();
-    }
-
-    public static boolean checkIfDisplayExistsIn(Coding coding) {
-        return coding.getDisplay() != null;
-    }
-
-    public static CodeableConcept getIssueDetailsFrom(Parameters.ParametersParameterComponent operationOutcomeParameter) {
-        return ((OperationOutcome.OperationOutcomeIssueComponent) operationOutcomeParameter.getResource().getChildByName("issue").getValues().get(0)).getDetails();
+                codeableConcept.getCoding().stream().anyMatch(FHIRHelper::hasDisplay);
     }
 
     public static void addIssueDetailsToResponse(CodeableConcept codeableConcept, String locationExpression, Parameters response, FHIRConcept concept) {
@@ -661,6 +644,62 @@ public class FHIRHelper implements FHIRConstants {
         }
     }
 
+    public static boolean hasVersion(Coding coding) {
+        return coding != null && coding.getVersion() != null;
+    }
+
+    public static boolean hasDisplay(Coding coding) {
+        return coding != null && coding.getDisplay() != null;
+    }
+
+    public static boolean hasSystemAndCode(Coding coding) {
+        return coding != null && coding.getSystem() != null && coding.getCode() != null;
+    }
+
+    public static boolean isFullyDetailedCodeableConcept(CodeableConcept codeableConcept) {
+        if (codeableConcept == null || CollectionUtils.isEmpty(codeableConcept.getCoding())) {
+            return false;
+        }
+        return isFullyDetailedCoding(codeableConcept.getCoding().get(0));
+    }
+
+    public static Optional<Coding> findFullyDetailedCodingIn(CodeableConcept codeableConcept) {
+        return codeableConcept.getCoding().stream()
+                .filter(FHIRHelper::isFullyDetailedCoding)
+                .findFirst();
+    }
+
+    public static Optional<Coding> findNotFullyDetailedCodingIn(CodeableConcept codeableConcept) {
+        return codeableConcept.getCoding().stream()
+                .filter(coding -> !hasVersion(coding) && !hasDisplay(coding))
+                .findFirst();
+    }
+
+    public static Coding mapCodingDetailsFrom(Coding detailedCoding) {
+        return new Coding()
+                .setCode(detailedCoding.getCode())
+                .setSystem(detailedCoding.getSystem())
+                .setDisplay(detailedCoding.getDisplay())
+                .setVersion(detailedCoding.getVersion());
+    }
+
+    public static Coding mapBasicCodingDetailsFrom(Coding basicCoding) {
+        return new Coding()
+                .setCode(basicCoding.getCode())
+                .setSystem(basicCoding.getSystem());
+    }
+
+    public static OperationOutcome.OperationOutcomeIssueComponent createIssue(String issueType, String code, String display, String text,
+                                                                              String locationExpression, OperationOutcome.IssueSeverity severity,
+                                                                              OperationOutcome.IssueType issueCategory, List<Extension> extensions, String diagnostics) {
+        CodeableConcept issueDetails = new CodeableConcept(new Coding(issueType, code, display)).setText(text);
+        return createOperationOutcomeIssueComponent(issueDetails, severity, locationExpression, issueCategory, extensions, diagnostics);
+    }
+
+    private static boolean isFullyDetailedCoding(Coding coding) {
+        return hasSystemAndCode(coding) && hasDisplay(coding) && hasVersion(coding);
+    }
+
     private static boolean allNonNullFrom(Object... objects) {
         return Arrays.stream(objects).allMatch(Objects::nonNull);
     }
@@ -677,5 +716,9 @@ public class FHIRHelper implements FHIRConstants {
         return Stream.of(coding.getCode(), coding.getSystem(), coding.getVersion(), coding.getDisplay())
                 .filter(Objects::nonNull)
                 .count() == 3;
+    }
+
+    private static CodeableConcept getIssueDetailsFrom(Parameters.ParametersParameterComponent operationOutcomeParameter) {
+        return ((OperationOutcome.OperationOutcomeIssueComponent) operationOutcomeParameter.getResource().getChildByName("issue").getValues().get(0)).getDetails();
     }
 }

@@ -3,7 +3,6 @@ package org.snomed.snowstorm.fhir.domain;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.hl7.fhir.r4.model.CodeSystem;
 import org.hl7.fhir.r4.model.Enumerations;
-import org.hl7.fhir.r4.model.Extension;
 import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
@@ -164,6 +163,9 @@ public class FHIRCodeSystemVersion {
 			url = SNOMED_URI_UNVERSIONED;
 			version = SNOMED_URI_UNVERSIONED + "/" + moduleId;
 			content = CodeSystem.CodeSystemContentMode.COMPLETE.toCode();
+		}
+		if(snomedCodeSystem.getLanguages() != null && snomedCodeSystem.getLanguages().size() == 1) {
+			language = snomedCodeSystem.getLanguages().keySet().iterator().next();
 		}
 		snomedBranch = snomedCodeSystem.getBranchPath();
 		this.snomedCodeSystem = snomedCodeSystem;

@@ -4,13 +4,6 @@
 # Use a Debian-based OpenJDK 17 image (includes apt)
 FROM openjdk:17-jdk-buster
 
-# Set up environment variables
-ENV APP_HOME=/app
-ENV SNOMED_HOME=$APP_HOME/snomed
-ENV LOINC_HOME=$APP_HOME/loinc
-ENV HL7_HOME=$APP_HOME/hl7
-ENV PUPPETEER_CACHE_DIR=$APP_HOME/.cache/puppeteer
-
 # Install Nodejs and libraries necessary for puppeteer to work + utilities
 RUN curl -sL https://deb.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh &&\
     bash /tmp/nodesource_setup.sh \
@@ -42,6 +35,14 @@ RUN curl -sL https://deb.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh &
     nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Set up environment variables
+ENV APP_HOME=/app
+ENV SNOMED_HOME=$APP_HOME/snomed
+ENV LOINC_HOME=$APP_HOME/loinc
+ENV HL7_HOME=$APP_HOME/hl7
+ENV UCUM_HOME=$APP_HOME/ucum
+ENV PUPPETEER_CACHE_DIR=$APP_HOME/.cache/puppeteer
+
 #############
 ### LOINC ###
 #############
@@ -70,6 +71,18 @@ WORKDIR $SNOMED_HOME
 # For local testing of snomed imports
 #COPY snomed-edition*-sample*.zip $SNOMED_HOME/
 #COPY snomed-extension*-sample*.zip $SNOMED_HOME/
+
+##############
+### UCUM ###
+##############
+WORKDIR $UCUM_HOME
+RUN ZIPBALL_URL=$(curl -s https://api.github.com/repos/ucum-org/ucum/releases/latest | jq -r '.zipball_url') && \
+        curl -fsSL "$ZIPBALL_URL" -o ucum-source.zip && \
+        unzip ucum-source.zip && \
+        find . -name ucum-essence.xml -exec mv {} "$UCUM_HOME/ucum-essence.xml" \; && \
+        echo "ucum-essence.xml from UCUM (source zipball), © Regenstrief Institute. See https://unitsofmeasure.org for license." > /UCUM_LICENSE.txt && \
+        rm -rf ucum-source.zip ucum-org-ucum-*
+#COPY ucum-essence.xml $UCUM_HOME
 
 ##############
 ### Common ###

@@ -37,10 +37,10 @@ import static org.snomed.snowstorm.config.Config.DEFAULT_LANGUAGE_DIALECTS;
 @Component
 public class FHIRHelper implements FHIRConstants {
 
-	private static final Pattern SNOMED_URI_MODULE_PATTERN = Pattern.compile("http://snomed.info/x?sct/(\\d+)");
-	private static final Pattern SNOMED_URI_MODULE_AND_VERSION_PATTERN = Pattern.compile("http://snomed.info/x?sct/(\\d+)/version/([\\d]{8})");
-	private static final Pattern SCT_ID_PATTERN = Pattern.compile("sct_(\\d)+_(\\d){8}");
+	public static final Pattern SNOMED_URI_MODULE_PATTERN = Pattern.compile("http://snomed.info/x?sct/(\\d+)");
+	public static final Pattern SNOMED_URI_MODULE_AND_VERSION_PATTERN = Pattern.compile("http://snomed.info/x?sct/(\\d+)/version/([\\d]{8})");
 	public static int DEFAULT_PAGESIZE = 1_000;
+	private static final Pattern SCT_ID_PATTERN = Pattern.compile("sct_(\\d)+_(\\d){8}");
 
 	@Autowired
 	private DialectConfigurationService dialectService;
@@ -53,6 +53,10 @@ public class FHIRHelper implements FHIRConstants {
 	
 	public static boolean isSnomedUri(String uri) {
 		return uri != null && (uri.startsWith(SNOMED_URI) || uri.startsWith(SNOMED_URI_UNVERSIONED));
+	}
+
+	public static boolean isUcumUri(String uri) {
+		return uri != null && uri.startsWith(UCUM_URI);
 	}
 
 	static String translateDescType(String typeSctid) {
@@ -119,11 +123,8 @@ public class FHIRHelper implements FHIRConstants {
 		if (displayLanguageParam != null) {
 			return displayLanguageParam;
 		}
-		if (acceptHeader != null) {
-			return acceptHeader;
-		}
-		return null;
-	}
+        return acceptHeader;
+    }
 
 	public static void parameterNamingHint(String incorrectParamName, Object incorrectParamValue, String correctParamName) {
 		if (incorrectParamValue != null) {
@@ -357,7 +358,7 @@ public class FHIRHelper implements FHIRConstants {
 
 	public String recoverCode(CodeType code, Coding coding) {
 		if (code == null && coding == null) {
-			throw exception("Use either 'code' or 'coding' parameters, not both.", IssueType.INVARIANT, 400);
+			throw exception("Use either 'code' or 'coding' parameters, not none.", IssueType.INVARIANT, 400);
 		} else if (code != null) {
 			if (code.getCode().contains("|") &&
 					// Only throw error if there is only one pipe in the code, otherwise this may be a postcoordinated expression with terms.

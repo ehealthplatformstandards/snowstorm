@@ -1405,14 +1405,20 @@ public class FHIRValueSetService {
 		for (Coding codingA : codings) {
 			FHIRConcept concept = findInValueSet(codingA, resolvedCodeSystemVersionsMatchingCodings, codeSelectionCriteria, languageDialects);
 			if (concept != null) {
+				String message = format("The provided code '%s' was not found in the value set '%s'", createFullyQualifiedCodeString(codingA),CanonicalUri.of(hapiValueSet.getUrl(),hapiValueSet.getVersion()));
 				if (codings.size() == 1 && FHIRHelper.isSnomedUri(codingA.getSystem())) {
 					response.addParameter("inactive", !concept.isActive());
 				} else if (codings.size() == 1 && !FHIRHelper.isSnomedUri(codingA.getSystem()) && !concept.isActive()){
 					response.addParameter("inactive", true);
+					response.addParameter("message", message);
+					OperationOutcome.OperationOutcomeIssueComponent[] issues = new OperationOutcome.OperationOutcomeIssueComponent[2];
+					String locationExpression = "Coding.code";
+					issues[0] = createOperationOutcomeIssueComponent(new CodeableConcept(new Coding(TX_ISSUE_TYPE, "code-rule",null)).setText(format("The code '%s' is valid but is not active", codingA.getCode())), OperationOutcome.IssueSeverity.ERROR,locationExpression, OperationOutcome.IssueType.BUSINESSRULE,null,null);
+					issues[1] = createOperationOutcomeIssueComponent(new CodeableConcept(new Coding(TX_ISSUE_TYPE, "not-in-vs",null)).setText(message), OperationOutcome.IssueSeverity.ERROR, locationExpression, OperationOutcome.IssueType.CODEINVALID, null, null);
+					response.addParameter(createParameterComponentWithOperationOutcomeWithIssues(Arrays.asList(issues)));
 					if(hapiValueSet.getCompose().hasInactive() && !hapiValueSet.getCompose().getInactive()) {
-						OperationOutcome.OperationOutcomeIssueComponent[] issues = new OperationOutcome.OperationOutcomeIssueComponent[2];
-						String locationExpression = "Coding.code";
-						String message = format("The provided code '%s' was not found in the value set '%s'", createFullyQualifiedCodeString(codingA),CanonicalUri.of(hapiValueSet.getUrl(),hapiValueSet.getVersion()));
+						issues = new OperationOutcome.OperationOutcomeIssueComponent[2];
+						locationExpression = "Coding.code";
 						issues[0] = createOperationOutcomeIssueComponent(new CodeableConcept(new Coding(TX_ISSUE_TYPE, "code-rule",null)).setText(format("The code '%s' is valid but is not active", codingA.getCode())), OperationOutcome.IssueSeverity.ERROR,locationExpression, OperationOutcome.IssueType.BUSINESSRULE,null,null);
 						issues[1] = createOperationOutcomeIssueComponent(new CodeableConcept(new Coding(TX_ISSUE_TYPE, "not-in-vs",null)).setText(message), OperationOutcome.IssueSeverity.ERROR, locationExpression, OperationOutcome.IssueType.CODEINVALID, null, null);
 						response.addParameter(createParameterComponentWithOperationOutcomeWithIssues(Arrays.asList(issues)));
@@ -1449,8 +1455,12 @@ public class FHIRValueSetService {
 				}
 				String codingADisplay = codingA.getDisplay();
 				if (codingADisplay == null || Objects.equals(codingADisplay, concept.getDisplay())) {
-					response.addParameter("result", true);
-					FHIRCodeSystemVersion codeSystemVersion = codeSystemService.findCodeSystemVersion(new FHIRCodeSystemVersionParams(codingA.getSystem()));
+                    if (concept.isActive()) {
+                        response.addParameter("result", true);
+                    } else {
+                        response.addParameter("result", false);
+                    }
+                    FHIRCodeSystemVersion codeSystemVersion = codeSystemService.findCodeSystemVersion(new FHIRCodeSystemVersionParams(codingA.getSystem()));
 					if(concept.getDisplay()!=null){
 						SelectedDisplay selectedDisplay = selectDisplay(codingA.getSystem(),displayLanguage,concept);
 						response.addParameter("display", selectedDisplay.selectedDisplay);
@@ -1508,7 +1518,7 @@ public class FHIRValueSetService {
 						response.addParameter("result", false);
 						CodeableConcept cc;
 						if(selectedDisplay.languageAvailable == null){
-							String message = "Wrong Display Name '%s' for %s#%s. Valid display is '%s' (for the language(s) '%s')";
+							message = "Wrong Display Name '%s' for %s#%s. Valid display is '%s' (for the language(s) '%s')";
 							response.addParameter("message", format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), selectedDisplay.selectedDisplay, displayLanguage==null?"--":displayLanguage));
 							cc = new CodeableConcept(new Coding().setSystem(TX_ISSUE_TYPE).setCode("invalid-display")).setText(format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), selectedDisplay.selectedDisplay, displayLanguage==null?"--":displayLanguage));
 						}
@@ -1530,12 +1540,12 @@ public class FHIRValueSetService {
 
 
 							} else {
-								String message = "Wrong Display Name '%s' for %s#%s. Valid display is '%s' (%s) (for the language(s) '%s')";
+								message = "Wrong Display Name '%s' for %s#%s. Valid display is '%s' (%s) (for the language(s) '%s')";
 								response.addParameter("message", format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), selectedDisplay.selectedDisplay, selectedDisplay.selectedLanguage, displayLanguage != null ? displayLanguage : "--"));
 								cc = new CodeableConcept(new Coding().setSystem(TX_ISSUE_TYPE).setCode("invalid-display")).setText(format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), selectedDisplay.selectedDisplay, selectedDisplay.selectedLanguage, displayLanguage != null ? displayLanguage : "--"));
 							}
 						} else {
-							String message = "Wrong Display Name '%s' for %s#%s. There are no valid display names found for language(s) '%s'. Default display is '%s'";
+							message = "Wrong Display Name '%s' for %s#%s. There are no valid display names found for language(s) '%s'. Default display is '%s'";
 							response.addParameter("message", format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), displayLanguage, concept.getDisplay()));
 							cc = new CodeableConcept(new Coding().setSystem(TX_ISSUE_TYPE).setCode("invalid-display")).setText(format(message, codingA.getDisplay(), codingA.getSystem(), codingA.getCode(), displayLanguage, concept.getDisplay()));
 						}

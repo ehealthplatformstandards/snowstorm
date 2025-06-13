@@ -50,14 +50,17 @@ services:
       "--elasticsearch.urls=http://es:9200",
       "--syndication", # uncomment to import below terminologies + the default ones (ISO3166 etc)
       #"--atc=https://raw.githubusercontent.com/ehealthplatformstandards/atc-terminology-publisher/main/atc-codesystem.csv", # ensure the copyright is respected for your use-case before enabling (https://atcddd.fhi.no/copyright_disclaimer/)
+      "--icd10",
+      #"--icd10=icd102019en", # version based on filename on https://icdcdn.who.int/icd10/index.html
+      #"--icd10=local", # filename format icd10*.xml.zip
       "--hl7",
       #"--hl7=local",
       #"--hl7=6.1.0",
       #"--snomed=local",
-      "--snomed=http://snomed.info/sct/11000172109", # latest belgian extension (+ international edition dependency)
+      #"--snomed=http://snomed.info/sct/11000172109", # latest belgian extension (+ international edition dependency)
       #"--snomed=http://snomed.info/sct/11000172109/version/20250315", # specific version
       "--extension-country-code=BE", # mandatory when loading snomed extensions
-      "--loinc",
+      #"--loinc",
       #"--loinc=local",
       #"--loinc=2.78",
     ]

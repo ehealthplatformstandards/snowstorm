@@ -309,10 +309,11 @@ public abstract class Config extends ElasticsearchConfig {
 
 	protected void updateIndexMappingFieldsLimitSetting() {
 		try {
-			Request updateSettingsRequest = new Request("PUT", "/fhir-concept/_settings");
+			String indexName = getIndexNamePrefix() + "fhir-concept";
+			Request updateSettingsRequest = new Request("PUT", "/" + indexName + "/_settings");
 			updateSettingsRequest.setJsonEntity("{\"" + INDEX_MAX_FIELDS_LIMIT + "\": " + indexMaxFieldsLimit + "}");
 			elasticsearchRestClient(clientConfiguration()).performRequest(updateSettingsRequest);
-			logger.info("{} is updated to {}", INDEX_MAX_FIELDS_LIMIT, indexMaxFieldsLimit);
+			logger.info("{} is updated to {} for {}", INDEX_MAX_FIELDS_LIMIT, indexMaxFieldsLimit, indexName);
 		} catch (IOException e) {
 			logger.error("Failed to update setting {}", INDEX_MAX_TERMS_COUNT, e);
 		}

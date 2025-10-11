@@ -46,6 +46,10 @@ public class ElasticsearchConfig extends ElasticsearchConfiguration {
 	@Value("${elasticsearch.index.prefix}")
 	private String indexNamePrefix;
 
+	protected String getIndexNamePrefix() {
+		return indexNamePrefix;
+	}
+
 	@Value("${elasticsearch.index.shards}")
 	short indexShards;
 

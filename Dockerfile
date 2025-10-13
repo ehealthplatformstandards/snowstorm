@@ -1,6 +1,26 @@
-# Dockerfile responsible of creating the snowstorm image. 
+# Dockerfile responsible of creating the snowstorm image.
 # The container is dependent on elasticsearch to be up and running (e.g. on port 9200).
 
+##############
+# Build Stage
+##############
+FROM maven:3.9-eclipse-temurin-17 AS builder
+
+WORKDIR /build
+
+# Copy pom.xml first for better caching
+COPY pom.xml .
+
+# Copy source code
+COPY src ./src
+
+# Build the application (skip tests for faster builds)
+# Dependencies will be downloaded during the build
+RUN mvn clean package -DskipTests -B
+
+##############
+# Runtime Stage
+##############
 # Use a Ubuntu-based image (includes apt)
 FROM ubuntu:22.04
 
@@ -111,11 +131,11 @@ RUN mkdir -p ./terminologyFiles
 ##############
 WORKDIR $UCUM_HOME
 RUN ZIPBALL_URL=$(curl -s https://api.github.com/repos/ucum-org/ucum/releases/latest | jq -r '.zipball_url') && \
-        curl -fsSL "$ZIPBALL_URL" -o ucum-source.zip && \
-        unzip ucum-source.zip && \
-        find . -name ucum-essence.xml -exec mv {} "$UCUM_HOME/ucum-codesystem.xml" \; && \
-        echo "ucum-essence.xml from UCUM (source zipball), © Regenstrief Institute. See https://unitsofmeasure.org for license." > /UCUM_LICENSE.txt && \
-        rm -rf ucum-source.zip ucum-org-ucum-*
+    curl -fsSL "$ZIPBALL_URL" -o ucum-source.zip && \
+    unzip ucum-source.zip && \
+    find . -name ucum-essence.xml -exec mv {} "$UCUM_HOME/ucum-codesystem.xml" \; && \
+    echo "ucum-essence.xml from UCUM (source zipball), © Regenstrief Institute. See https://unitsofmeasure.org for license." > /UCUM_LICENSE.txt && \
+    rm -rf ucum-source.zip ucum-org-ucum-*
 
 ##############
 ### ATC ######
@@ -166,13 +186,19 @@ RUN chown -R appuser:appuser $APP_HOME
 # Expose application port
 EXPOSE 8080
 
-# Copy Snowstorm JAR (you need to have built it first with Maven beforehand) + the entrypoint
-COPY target/snowstorm*.jar ./snowstorm.jar
+# Copy Snowstorm JAR from builder stage
+COPY --from=builder /build/target/snowstorm*.jar ./snowstorm.jar
 
 USER appuser
 
-# Run the app
-ENTRYPOINT ["java", "-Xms2g", "-Xmx4g", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "--add-opens", "java.base/java.util=ALL-UNNAMED", "-jar", "/app/snowstorm.jar"]
-
-# Using arguments that are likely to be customized
-CMD ["--elasticsearch.urls=http://es:9200","--snomed=http://snomed.info/sct/11000172109/version/20250315", "--extension-country-code=BE", "--loinc", "--hl7"]
+# Run the app with environment variable support for Elasticsearch configuration
+# Use shell form to enable env var expansion
+# Environment variables from .env: ELASTICSEARCH_URLS, ELASTICSEARCH_API_KEY
+CMD java -Xms2g -Xmx4g --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -jar /app/snowstorm.jar \
+    ${ELASTICSEARCH_URLS:+--elasticsearch.urls=${ELASTICSEARCH_URLS}} \
+    ${ELASTICSEARCH_API_KEY:+--elasticsearch.api-key=${ELASTICSEARCH_API_KEY}} \
+    --elasticsearch.index.prefix=snowstorm_ \
+    --snomed=http://snomed.info/sct/11000172109 \
+    --extension-country-code=BE \
+    --loinc \
+    --hl7

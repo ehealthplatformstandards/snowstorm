@@ -3,6 +3,7 @@ package org.snomed.snowstorm.config;
 import org.snomed.snowstorm.rest.converter.ItemsPageCSVConverter;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.PathMatchConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -15,8 +16,18 @@ public class WebConfig implements WebMvcConfigurer {
 		// Workaround until we have removed trailing slashes in UI
 		configurer.setUseTrailingSlashMatch(true);
 	}
+
 	@Override
 	public void configureMessageConverters(List<HttpMessageConverter<?>> converters) {
 		converters.add(new ItemsPageCSVConverter());
+	}
+
+	@Override
+	public void addCorsMappings(CorsRegistry registry) {
+		registry.addMapping("/**")
+				.allowedOrigins("*")
+				.allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+				.allowedHeaders("*")
+				.maxAge(3600);
 	}
 }

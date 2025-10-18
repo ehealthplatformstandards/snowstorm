@@ -169,6 +169,7 @@ public class SecurityAndUriConfig {
 	@Bean
 	public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 		http.csrf(AbstractHttpConfigurer::disable);// lgtm [java/spring-disabled-csrf-protection]
+		http.cors(withDefaults());
 
 		if (restApiReadOnly) {
 			// Read-ony mode

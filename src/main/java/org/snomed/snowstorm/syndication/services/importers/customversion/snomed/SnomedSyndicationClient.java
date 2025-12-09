@@ -127,8 +127,7 @@ public class SnomedSyndicationClient {
             String xmlBody = response.getBody();
             assert xmlBody != null;
             xmlBody = xmlBody.replace("xmlns=\"http://www.w3.org/2005/Atom\"", "")
-                    .replace("&dl=", "&amp;dl=")
-                    .replace("&rlkey=", "&amp;rlkey=");
+                    .replaceAll("&(?!amp;)", "&amp;");
             SyndicationFeed feed = (SyndicationFeed) jaxbContext.createUnmarshaller().unmarshal(new StringReader(xmlBody));
             List<SyndicationFeedEntry> sortedEntries = new ArrayList<>(feed.getEntries());
             sortedEntries.sort(Comparator.comparing(SyndicationFeedEntry::getContentItemVersion, Comparator.reverseOrder()));

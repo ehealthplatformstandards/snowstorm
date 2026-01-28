@@ -51,7 +51,7 @@ async function downloadLatestReleaseFile(page) {
     await page.click('.dlm-tc-submit');
 
     console.log('Waiting for download to complete...');
-    const fileDownloaded = await waitForDownload(downloadPath, 30000);
+    const fileDownloaded = await waitForDownload(downloadPath, 120000);
 
     if (fileDownloaded) {
         console.log('LOINC download complete!');

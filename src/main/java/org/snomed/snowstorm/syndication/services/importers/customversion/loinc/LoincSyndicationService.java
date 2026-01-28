@@ -6,8 +6,10 @@ import org.snomed.snowstorm.syndication.models.domain.SyndicationImportParams;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Optional;
 
@@ -39,16 +41,30 @@ public class LoincSyndicationService extends SyndicationService {
     @Override
     protected void importTerminology(SyndicationImportParams params, List<File> files) throws IOException, InterruptedException {
         String fileName = files.get(0).getName();
-        Process process = new ProcessBuilder(
-                "../../hapi/hapi-fhir-cli", "upload-terminology",
-                "-d", fileName,
-                "-v", "r4",
-                "-t", "http://localhost:8080/fhir",
-                "-u", "http://loinc.org")
-                .directory(new File(workingDirectory))
-                .start();
+        try {
+            Process process = new ProcessBuilder(
+                    "../../hapi/hapi-fhir-cli", "upload-terminology",
+                    "-d", fileName,
+                    "-v", "r4",
+                    "-t", "http://localhost:8080/fhir", // Update with your FHIR server URL
+                    "-u", "http://loinc.org")
+                    .directory(new File(workingDirectory))
+                    .redirectErrorStream(true) // Combine output and error streams
+                    .start();
 
-        waitForProcessTermination(process, "Import LOINC terminology");
+            // Read the output from the command
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line); // Print the output
+            }
+
+            // Wait for the process to complete
+            int exitCode = process.waitFor();
+            System.out.println("Process exited with code: " + exitCode);
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
     }
 
     private Optional<File> downloadLoincZip(String version) throws IOException, InterruptedException {

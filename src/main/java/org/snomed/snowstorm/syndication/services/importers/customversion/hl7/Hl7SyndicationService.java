@@ -9,17 +9,18 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Collections.singletonList;
+import static org.snomed.snowstorm.syndication.utils.CommandUtils.*;
 import static org.snomed.snowstorm.syndication.utils.FileUtils.findFile;
 import static org.snomed.snowstorm.syndication.constants.SyndicationConstants.HL_7_TERMINOLOGY;
-import static org.snomed.snowstorm.syndication.utils.CommandUtils.getSingleLineCommandResult;
-import static org.snomed.snowstorm.syndication.utils.CommandUtils.waitForProcessTermination;
 import static org.snomed.snowstorm.syndication.constants.SyndicationConstants.LATEST_VERSION;
 import static org.snomed.snowstorm.syndication.constants.SyndicationConstants.LOCAL_VERSION;
 
@@ -65,7 +66,7 @@ public class Hl7SyndicationService extends SyndicationService {
         Process process = new ProcessBuilder("npm", "--registry", "https://packages.simplifier.net", "pack", packageName)
                 .directory(new File(workingDirectory))
                 .start();
-        waitForProcessTermination(process, "Download hl7 terminology");
+        waitForHl7ProcessTermination(process, "Download hl7 terminology");
         return findFile(workingDirectory, fileNamePattern);
     }
 
@@ -95,5 +96,44 @@ public class Hl7SyndicationService extends SyndicationService {
     @Override
     protected String getLatestTerminologyVersion(String params) throws IOException, InterruptedException {
         return getSingleLineCommandResult("curl -s https://packages.simplifier.net/hl7.terminology.r4 | jq -r '.versions | map(.version)[]' | tail -n 1");
+    }
+
+    public void waitForHl7ProcessTermination(Process process, String processName) throws InterruptedException {
+        logger.info("Starting process {}", processName);
+
+        Thread stdoutReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    logger.info(line);
+                }
+            } catch (IOException e) {
+                logger.error("Error reading stdout", e);
+            }
+        });
+
+        Thread stderrReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    logger.error(line);
+                }
+            } catch (IOException e) {
+                logger.error("Error reading stderr", e);
+            }
+        });
+
+        stdoutReader.start();
+        stderrReader.start();
+
+        int exitCode = process.waitFor();
+
+        stdoutReader.join();
+        stderrReader.join();
+
+        logger.info("Process {} exited with code: {}", processName, exitCode);
+        if(exitCode != 0) {
+            throw new RuntimeException("Process " + processName + " exited with code " + exitCode);
+        }
     }
 }

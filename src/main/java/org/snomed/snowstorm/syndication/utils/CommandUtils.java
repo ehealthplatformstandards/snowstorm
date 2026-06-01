@@ -11,40 +11,25 @@ public class CommandUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(CommandUtils.class);
 
-    public static void waitForProcessTermination(Process process, String processName) throws InterruptedException {
+    public static void waitForProcessTermination(Process process, String processName) throws InterruptedException, IOException {
         logger.info("Starting process {}", processName);
 
-        Thread stdoutReader = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    logger.info(line);
-                }
-            } catch (IOException e) {
-                logger.error("Error reading stdout", e);
-            }
-        });
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+             BufferedReader errorReader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
 
-        Thread stderrReader = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    logger.error(line);
-                }
-            } catch (IOException e) {
-                logger.error("Error reading stderr", e);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                logger.info(line);
             }
-        });
-
-        stdoutReader.start();
-        stderrReader.start();
+            while ((line = errorReader.readLine()) != null) {
+                logger.error(line);
+            }
+        }
 
         int exitCode = process.waitFor();
 
-        stdoutReader.join();
-        stderrReader.join();
-
         logger.info("Process {} exited with code: {}", processName, exitCode);
+
         if(exitCode != 0) {
             throw new RuntimeException("Process " + processName + " exited with code " + exitCode);
         }

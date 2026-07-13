@@ -1,4 +1,4 @@
-name: Swnowstorm CI
+name: Snowstorm CI
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 #      - master
 
 jobs:
-  build:
+  Snowstorm-build:
     runs-on: ubuntu-latest
 
     steps:

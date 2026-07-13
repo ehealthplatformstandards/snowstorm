@@ -49,3 +49,7 @@ jobs:
         run: |
           docker build -t ehealthplatformstandards/snowstorm:test_ci .
           docker images  
+
+      - name: Push Docker image
+        run: |
+          docker push ehealthplatformstandards/snowstorm:test_ci    

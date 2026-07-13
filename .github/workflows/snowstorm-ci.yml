@@ -3,7 +3,7 @@ name: Swnowstorm CI
 on:
   push:
     branches:
-      - feature/snowstorm_automation
+      - features/snowstorm_automation
 #  pull_request:
 #    branches:
 #      - master
@@ -19,5 +19,5 @@ jobs:
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
-          java-version: '17' # Change to your required Java version
+          java-version: '17'
           distribution: 'temurin'

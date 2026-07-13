@@ -3,7 +3,7 @@ name: Swnowstorm CI
 on:
   push:
     branches:
-      - master
+      - feature/snowstorm_automation
 #  pull_request:
 #    branches:
 #      - master

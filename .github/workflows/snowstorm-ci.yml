@@ -3,7 +3,7 @@ name: Snowstorm CI
 on:
   push:
     branches:
-      - features/ako/snowstorm_automation
+      - master
   pull_request:
     branches:
       - master

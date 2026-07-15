@@ -3,7 +3,7 @@ name: Snowstorm CI
 on:
   push:
     branches:
-      - features/ako/snowstorm_automation
+      - master
   pull_request:
     branches:
       - master
@@ -45,20 +45,20 @@ jobs:
         run: |
           echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin > /dev/null 2>&1
 
-#      - name: Build Docker image
-#        run: |
-#          # Get the current date in YYYYMMDD format
-#          CURRENT_DATE=$(date +'%Y%m%d')
-#          # Use the GitHub run number as the build number
-#          BUILD_NUMBER=${GITHUB_RUN_NUMBER}
-#          # Tag the image with the date and build number
-#          IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
-#          docker build -t $IMAGE_TAG .
-#          docker tag $IMAGE_TAG ehealthplatformstandards/snowstorm:latest  # Tag as latest
-#          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV  # Save the IMAGE_TAG to the environment for later
-#          docker images
-#
-#      - name: Push Docker image
-#        run: |
-#          docker push $IMAGE_TAG
-#          docker push ehealthplatformstandards/snowstorm:latest  # Push the latest tag
+      - name: Build Docker image
+        run: |
+          # Get the current date in YYYYMMDD format
+          CURRENT_DATE=$(date +'%Y%m%d')
+          # Use the GitHub run number as the build number
+          BUILD_NUMBER=${GITHUB_RUN_NUMBER}
+          # Tag the image with the date and build number
+          IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
+          docker build -t $IMAGE_TAG .
+          docker tag $IMAGE_TAG ehealthplatformstandards/snowstorm:latest  # Tag as latest
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV  # Save the IMAGE_TAG to the environment for later
+          docker images
+
+      - name: Push Docker image
+        run: |
+          docker push $IMAGE_TAG
+          docker push ehealthplatformstandards/snowstorm:latest  # Push the latest tag

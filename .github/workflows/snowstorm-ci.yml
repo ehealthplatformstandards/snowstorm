@@ -3,7 +3,7 @@ name: Snowstorm CI
 on:
   push:
     branches:
-      - master
+      - features/ako/snowstorm_automation
   pull_request:
     branches:
       - master
@@ -42,6 +42,9 @@ jobs:
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin > /dev/null 2>&1
+
 
       - name: Build Docker image
         run: |

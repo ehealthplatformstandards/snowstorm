@@ -3,7 +3,7 @@ name: Snowstorm CI
 on:
   push:
     branches:
-      - master
+      - features/ako/snowstorm_automation
   pull_request:
     branches:
       - master
@@ -45,12 +45,18 @@ jobs:
         run: |
           echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin > /dev/null 2>&1
 
-
       - name: Build Docker image
         run: |
-          docker build -t ehealthplatformstandards/snowstorm:latest .
+          # Get the current date in YYYYMMDD format
+          CURRENT_DATE=$(date +'%Y%m%d')
+          # Use the GitHub run number as the build number
+          BUILD_NUMBER=${GITHUB_RUN_NUMBER}
+          # Tag the image with the build number and date
+          IMAGE_TAG="ehealthplatformstandards/snowstorm:${BUILD_NUMBER}-${CURRENT_DATE}"
+          docker build -t $IMAGE_TAG .
           docker images  
 
       - name: Push Docker image
         run: |
-          docker push ehealthplatformstandards/snowstorm:latest    
+          IMAGE_TAG="ehealthplatformstandards/snowstorm:${{ github.run_number }}-${{ steps.date.outputs.current_date }}"
+          docker push $IMAGE_TAG    

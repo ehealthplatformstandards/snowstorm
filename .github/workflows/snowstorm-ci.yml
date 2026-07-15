@@ -3,10 +3,10 @@ name: Snowstorm CI
 on:
   push:
     branches:
-      - features/ako/snowstorm_automation
-#  pull_request:
-#    branches:
-#      - master
+      - master
+  pull_request:
+    branches:
+      - master
 
 jobs:
   Snowstorm-build:
@@ -47,9 +47,9 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ehealthplatformstandards/snowstorm:test_ci .
+          docker build -t ehealthplatformstandards/snowstorm:latest .
           docker images  
 
       - name: Push Docker image
         run: |
-          docker push ehealthplatformstandards/snowstorm:test_ci    
+          docker push ehealthplatformstandards/snowstorm:latest    

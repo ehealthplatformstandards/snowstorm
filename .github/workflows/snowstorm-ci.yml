@@ -51,12 +51,12 @@ jobs:
           CURRENT_DATE=$(date +'%Y%m%d')
           # Use the GitHub run number as the build number
           BUILD_NUMBER=${GITHUB_RUN_NUMBER}
-          # Tag the image with the build number and date
-          IMAGE_TAG="ehealthplatformstandards/snowstorm:${BUILD_NUMBER}-${CURRENT_DATE}"
+          # Tag the image with the date and build number
+          IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
           docker build -t $IMAGE_TAG .
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV  # Save the IMAGE_TAG to the environment for later
           docker images  
 
       - name: Push Docker image
         run: |
-          IMAGE_TAG="ehealthplatformstandards/snowstorm:${{ github.run_number }}-${{ steps.date.outputs.current_date }}"
           docker push $IMAGE_TAG    

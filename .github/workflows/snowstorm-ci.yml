@@ -54,9 +54,11 @@ jobs:
           # Tag the image with the date and build number
           IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
           docker build -t $IMAGE_TAG .
+          docker tag $IMAGE_TAG ehealthplatformstandards/snowstorm:latest  # Tag as latest
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV  # Save the IMAGE_TAG to the environment for later
           docker images  
 
       - name: Push Docker image
         run: |
-          docker push $IMAGE_TAG    
+          docker push $IMAGE_TAG
+          docker push ehealthplatformstandards/snowstorm:latest  # Push the latest tag

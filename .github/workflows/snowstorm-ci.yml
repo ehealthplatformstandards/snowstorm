@@ -1,0 +1,64 @@
+name: Snowstorm CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  Snowstorm-build:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Build and package without running tests
+        run: mvn clean package -DskipTests
+
+      - name: List the contents of the target directory
+        run: ls -la target
+
+      - name: Login to Docker Hub
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin > /dev/null 2>&1
+
+      - name: Build Docker image
+        run: |
+          # Get the current date in YYYYMMDD format
+          CURRENT_DATE=$(date +'%Y%m%d')
+          # Use the GitHub run number as the build number
+          BUILD_NUMBER=${GITHUB_RUN_NUMBER}
+          # Tag the image with the date and build number
+          IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
+          docker build -t $IMAGE_TAG .
+          docker tag $IMAGE_TAG ehealthplatformstandards/snowstorm:latest  # Tag as latest
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV  # Save the IMAGE_TAG to the environment for later
+          docker images
+
+      - name: Push Docker image
+        run: |
+          docker push $IMAGE_TAG
+          docker push ehealthplatformstandards/snowstorm:latest  # Push the latest tag

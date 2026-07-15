@@ -14,3 +14,4 @@ snomed-drools-rules
 authoring-traceability.log*
 /application.properties
 test.properties
+!/.github/

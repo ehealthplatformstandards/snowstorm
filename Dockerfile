@@ -83,7 +83,13 @@ RUN mkdir -p $ICD10_BE/terminologyFiles
 ### LOINC ###
 #############
 WORKDIR $LOINC_HOME
-RUN mkdir -p ./terminologyFiles && npm i puppeteer
+RUN mkdir -p ./terminologyFiles && npm i puppeteer  \
+    && npm i puppeteer-extra \
+    && npm i puppeteer-core \
+    && npm i puppeteer-extra-plugin \
+    && npm i puppeteer-extra-plugin-user-data-dir \
+    && npm i puppeteer-extra-plugin-user-preferences \
+    && npm i puppeteer-extra-plugin-stealth
 # Copy puppeteer script to image
 COPY download_loinc.mjs $LOINC_HOME/download_loinc.mjs
 # For local testing of loinc imports

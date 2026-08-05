@@ -12,7 +12,7 @@ if (!fs.existsSync(downloadPath)) {
 }
 
 async function setupBrowser() {
-    const browser = await puppeteer.launch({ headless: true, args:['--no-sandbox'] });
+    const browser = await puppeteer.launch({ headless: false, args:['--no-sandbox'] });
     const page = await browser.newPage();
 
     // Set a realistic User-Agent to avoid being blocked
@@ -70,23 +70,12 @@ async function downloadSpecificReleaseFile(page, version) {
 
     console.log('Searching for version ' + version + '...');
 
-    const downloadSelector = `a[href*='loinc-${version.replace(/\./g, "-")}']`; // e.g. match <a href="https://loinc.org/download/loinc-2-78-complete/?tmstv=1743515220">
-    const downloadLink = await page.evaluate((selector) => {
-        const link = document.querySelector(selector);
-        return link ? link.href : null;
-    }, downloadSelector);
+    const downloadSelector = `a[href*='loinc-${version.replace(/\./g, "-")}']`;
 
-    if (!downloadLink) {
-        console.log(`Version ${version} not found.`);
-        return;
-    }
+    await page.waitForSelector(downloadSelector);
 
-    console.log(`Found download link: ${downloadLink}`);
-    await page.goto(downloadLink, { waitUntil: 'networkidle2' });
-
-    console.log('Accepting terms and conditions...');
-    await page.click('#tc_accepted_');
-    await page.click('.dlm-tc-submit');
+    console.log('Clicking download link...');
+    await page.click(downloadSelector);
 
     console.log('Waiting for download to complete...');
     const fileDownloaded = await waitForDownload(downloadPath, 120000);

@@ -7,24 +7,21 @@ puppeteer.use(StealthPlugin());
 
 const downloadPath = path.resolve('.'); // Set download directory
 
-// Ensure the directory exists
 if (!fs.existsSync(downloadPath)) {
     fs.mkdirSync(downloadPath, { recursive: true });
 }
 
-// Function to initialize Puppeteer and set download behavior
 async function setupBrowser() {
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await puppeteer.launch({ headless: true, args:['--no-sandbox'] });
     const page = await browser.newPage();
 
     // Set a realistic User-Agent to avoid being blocked
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
 
-    // Enable download behavior
     const client = await page.createCDPSession();
     await client.send('Page.setDownloadBehavior', {
         behavior: 'allow',
-        downloadPath: downloadPath // Set the download path to the current directory
+        downloadPath: downloadPath
     });
 
     return { browser, page };
@@ -53,8 +50,7 @@ async function downloadLatestReleaseFile(page) {
     console.log("Navigating to downloads...");
     await page.goto('https://loinc.org/downloads', { waitUntil: 'networkidle0', timeout: 60000 });
 
-// Trigger download
-    const downloadSelector = '#download-link-1321'; // Update this selector as needed
+    const downloadSelector = '#download-link-1321';
     console.log("Clicking download link...");
     await page.click(downloadSelector);
 
@@ -62,7 +58,7 @@ async function downloadLatestReleaseFile(page) {
     const fileDownloaded = await waitForDownload(downloadPath, 120000);
 
     if (fileDownloaded) {
-        console.log('LOINC download complete!');
+        console.log('LOINC download completed!');
     } else {
         console.log('LOINC Download timeout reached.');
     }
@@ -133,4 +129,4 @@ async function main() {
     }
 }
 
-main();
+await main();

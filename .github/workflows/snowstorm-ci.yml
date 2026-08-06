@@ -19,7 +19,6 @@ jobs:
         uses: actions/checkout@v5
 
       - name: List PR commits included in this build
-        if: ${{ github.event_name == 'pull_request' }}
         run: |
           git --no-pager fetch origin ${{ github.event.pull_request.base.ref }}:${{ github.event.pull_request.base.ref }}
           BASE="origin/${{ github.event.pull_request.base.ref }}"

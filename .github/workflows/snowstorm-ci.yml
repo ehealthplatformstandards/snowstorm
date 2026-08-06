@@ -18,14 +18,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: List commits included in this build
+      - name: Latest commit on branch
         run: |
           echo "GITHUB_SHA=$GITHUB_SHA"
           echo "GITHUB_REF=$GITHUB_REF"
-          echo "GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME"
-          
-          # Show the last 50 commits reachable from the checked-out HEAD
-          git --no-pager log -n 50 --pretty=format:"%h %ad %an %s"
+          git --no-pager log -1 --pretty=format:"%H%n%h %ad %an%n%s%n" HEAD
+
 
       - name: Set up JDK
         uses: actions/setup-java@v5

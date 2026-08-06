@@ -38,6 +38,9 @@ jobs:
       - name: List the contents of the target directory
         run: ls -la target
 
+      - name: Check Node version
+        run: node -v && npm -v
+
       - name: Login to Docker Hub
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}

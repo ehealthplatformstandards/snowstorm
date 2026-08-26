@@ -253,9 +253,19 @@ public class QueryConcept extends DomainEntity<QueryConcept> implements FHIRGrap
 		final Map<Integer, Map<String, List<Object>>> groupedAttributesMap = orEmpty(this.getGroupedAttributesMap());
 		final Map<Integer, Map<String, List<Object>>> otherGroupedAttributesMap = orEmpty(other.getGroupedAttributesMap());
 		// Sort both before comparing
-		groupedAttributesMap.values().forEach(value -> value.values().forEach(list -> list.sort(null)));
-		otherGroupedAttributesMap.values().forEach(value -> value.values().forEach(list -> list.sort(null)));
+		groupedAttributesMap.values().forEach(value -> value.values().forEach(list -> list.sort(QueryConcept::compareAttributeValues)));
+		otherGroupedAttributesMap.values().forEach(value -> value.values().forEach(list -> list.sort(QueryConcept::compareAttributeValues)));
 		return groupedAttributesMap.equals(otherGroupedAttributesMap);
+	}
+
+	private static int compareAttributeValues(Object left, Object right) {
+		if (left instanceof Number leftNumber && right instanceof Number rightNumber) {
+			return Double.compare(leftNumber.doubleValue(), rightNumber.doubleValue());
+		}
+		if (left instanceof String leftString && right instanceof String rightString) {
+			return leftString.compareTo(rightString);
+		}
+		return left instanceof String ? -1 : 1;
 	}
 
 	private <K, V> Map<K, V> orEmpty(Map<K, V> map) {
@@ -370,7 +380,7 @@ public class QueryConcept extends DomainEntity<QueryConcept> implements FHIRGrap
 					String type = attrParts[0];
 					String[] values = attrParts[1].split(",");
 					List<Object> transformed = checkAndTransformConcreteValues(Arrays.asList(values));
-					transformed.sort(null);
+					transformed.sort(QueryConcept::compareAttributeValues);
 					attributeMap.put(type, transformed);
 				}
 				groupedAttributesMap.put(groupNo, attributeMap);

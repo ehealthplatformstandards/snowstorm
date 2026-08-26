@@ -89,4 +89,13 @@ class QueryConceptTest {
 		assertEquals(4, result.get(0).size());
 	}
 
+	@Test
+	void testDeserializeMixedConceptAndConcreteValues() {
+		QueryConcept queryConcept = new QueryConcept();
+		queryConcept.setAttrMap("0:1142135004=123456,#500");
+
+		assertEquals(List.of("123456", 500),
+				queryConcept.getGroupedAttributesMap().get(0).get("1142135004"));
+	}
+
 }

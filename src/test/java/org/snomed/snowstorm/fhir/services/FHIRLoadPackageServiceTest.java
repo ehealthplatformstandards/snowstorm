@@ -21,6 +21,9 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FHIRLoadPackageServiceTest extends AbstractFHIRTest {
+	private static final String RESOURCE_ID = "device-status-reason";
+	private static final String VERSION = "0.1.0";
+	private static final String CODE_SYSTEM_VERSION_ID = RESOURCE_ID + "-" + VERSION;
 
 	@Autowired
 	private FHIRLoadPackageService service;
@@ -50,20 +53,23 @@ class FHIRLoadPackageServiceTest extends AbstractFHIRTest {
 	}
 
 	@AfterEach
-	public void testAfter() {
-		valueSetRepository.deleteById("device-status-reason");
-		codeSystemRepository.deleteById("device-status-reason");
+	public void testAfter() throws IOException {
+		valueSetRepository.deleteById(RESOURCE_ID);
+		codeSystemRepository.deleteById(CODE_SYSTEM_VERSION_ID);
+		if (packageFile != null) {
+			Files.deleteIfExists(packageFile.toPath());
+		}
 	}
 
 	@Test
 	void uploadPackageResources() throws IOException {
-		assertFalse(codeSystemRepository.findById("device-status-reason").isPresent());
-		assertFalse(valueSetRepository.findById("device-status-reason").isPresent());
+		assertFalse(codeSystemRepository.findById(CODE_SYSTEM_VERSION_ID).isPresent());
+		assertFalse(valueSetRepository.findById(RESOURCE_ID).isPresent());
 
 		service.uploadPackageResources(packageFile, Collections.singleton("*"), packageFile.getName(), true);
 
-		assertTrue(codeSystemRepository.findById("device-status-reason").isPresent());
-		assertTrue(valueSetRepository.findById("device-status-reason").isPresent());
+		assertTrue(codeSystemRepository.findById(CODE_SYSTEM_VERSION_ID).isPresent());
+		assertTrue(valueSetRepository.findById(RESOURCE_ID).isPresent());
 
 		// Expand imported implicit value set, that includes codes from imported code system
 		//
@@ -74,7 +80,7 @@ class FHIRLoadPackageServiceTest extends AbstractFHIRTest {
 		ValueSet valueSet = fhirJsonParser.parseResource(ValueSet.class, valueSetString);
 		assertNotNull(valueSet);
 		assertEquals(testValueSetUri, valueSet.getUrl());
-		assertEquals("0.1.0", valueSet.getVersion());
+		assertEquals(VERSION, valueSet.getVersion());
 		assertEquals(8, valueSet.getExpansion().getContains().size());
 	}
 

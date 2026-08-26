@@ -8,6 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 
+import java.util.Comparator;
+import java.util.Date;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class FHIRCodeSystemProviderInstancesTest extends AbstractFHIRTest {
@@ -40,11 +44,23 @@ class FHIRCodeSystemProviderInstancesTest extends AbstractFHIRTest {
 		Bundle bundle = fhirJsonParser.parseResource(Bundle.class, response.getBody());
 		assertNotNull(bundle.getEntry());
 		assertEquals(4, bundle.getEntry().size());
+		List<CodeSystem> codeSystems = bundle.getEntry().stream()
+				.map(BundleEntryComponent::getResource)
+				.map(CodeSystem.class::cast)
+				.toList();
+
 		for (BundleEntryComponent entry : bundle.getEntry()) {
 			CodeSystem cs = (CodeSystem)(entry.getResource());
-			String title = cs.getTitle();
 			assertTrue(cs.getTitle().contains("SNOMED CT") || cs.getTitle().contains("ICD-10"), () -> "Found title " + cs.getTitle());
 		}
+
+		Comparator<String> nullSafeTitleComparator = Comparator.nullsFirst(Comparator.naturalOrder());
+		Comparator<Date> nullSafeDateComparator = Comparator.nullsFirst(Comparator.naturalOrder());
+		Comparator<CodeSystem> expectedOrder = Comparator
+				.comparing(CodeSystem::getTitle, nullSafeTitleComparator)
+				.thenComparing(Comparator.comparing(CodeSystem::getDate, nullSafeDateComparator).reversed());
+		assertEquals(codeSystems.stream().sorted(expectedOrder).toList(), codeSystems,
+				"Code systems should be sorted by title ascending, then date descending");
 	}
 	
 	@Test

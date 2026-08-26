@@ -301,7 +301,9 @@ public class FHIRValueSetService {
 			copyright = SNOMED_VALUESET_COPYRIGHT;
 
 			FHIRCodeSystemVersion codeSystemVersion = allInclusionVersions.iterator().next();
-			List<LanguageDialect> languageDialects = ControllerHelper.parseAcceptLanguageHeader(FHIRHelper.getDisplayLanguage(params.getDisplayLanguage(),displayLanguage));
+			String requestedDisplayLanguage = FHIRHelper.getDisplayLanguage(params.getDisplayLanguage(), displayLanguage);
+			List<LanguageDialect> languageDialects = ControllerHelper.parseAcceptLanguageHeader(
+					requestedDisplayLanguage != null ? requestedDisplayLanguage : codeSystemVersion.getLanguage());
 
 			// Constraints:
 			// - Elasticsearch prevents us from requesting results beyond the first 10K
@@ -698,6 +700,7 @@ public class FHIRValueSetService {
 		}).toList();
 		Map<String, ValueSet.ConceptReferenceDesignationComponent> languageToDesignation = new HashMap<>();
 		Map<String, List<Locale>> languageToVarieties = new HashMap<>();
+		List<ValueSet.ConceptReferenceDesignationComponent> allDesignations = new ArrayList<>();
 		List<Pair<LanguageDialect, Double>> weightedLanguages = ControllerHelper.parseAcceptLanguageHeaderWithWeights(displayLanguage,true);
 		Locale defaultLocale = Locale.forLanguageTag(defaultConceptLanguage);;
 		languageToVarieties.put(defaultLocale.getLanguage(), new ArrayList<>());
@@ -706,12 +709,9 @@ public class FHIRValueSetService {
 		languageToDesignation.put(defaultConceptLanguage, new ValueSet.ConceptReferenceDesignationComponent().setValue(component.getDisplay())
 				.setLanguage(defaultConceptLanguage) );
 
-		List<ValueSet.ConceptReferenceDesignationComponent> noLanguage = new ArrayList<>();
-
 		for (ValueSet.ConceptReferenceDesignationComponent designation : component.getDesignation()){
-			if (designation.getLanguage()==null) {
-				noLanguage.add(designation);
-			} else {
+			allDesignations.add(designation);
+			if (designation.getLanguage() != null) {
 				Locale designationLocale = Locale.forLanguageTag(designation.getLanguage());
 				if (languageToVarieties.get(designationLocale.getLanguage()) == null) {
 					List<Locale> allVarieties = new ArrayList<>();
@@ -734,9 +734,8 @@ public class FHIRValueSetService {
 							designationComponent.addExtension(e.getHapi());
 						}
 				);
-				if (designation.getLanguage()==null) {
-					noLanguage.add(designationComponent);
-				} else {
+				allDesignations.add(designationComponent);
+				if (designation.getLanguage() != null) {
 					Locale designationLocale = Locale.forLanguageTag(designation.getLanguage());
 					if (languageToVarieties.get(designationLocale.getLanguage()) == null) {
 						List<Locale> allVarieties = new ArrayList<>();
@@ -756,23 +755,9 @@ public class FHIRValueSetService {
 		}
 
 		if (includeDesignations) {
-			List<ValueSet.ConceptReferenceDesignationComponent> newDesignations = new ArrayList<>();
-			for (Map.Entry<String, ValueSet.ConceptReferenceDesignationComponent> entry : languageToDesignation.entrySet() ){
-
-				if (!entry.getKey().equals(requestedLanguage)) {
-					if (entry.getKey().equals(defaultConceptLanguage)) {
-						entry.getValue().setUse(new Coding("http://terminology.hl7.org/CodeSystem/designation-usage", "display", null));
-					}
-
-
-					if(designationLang.isEmpty() || designationLang.contains(entry.getValue().getLanguage())) {
-						newDesignations.add(entry.getValue());
-					}
-
-				}
-			}
-			newDesignations.addAll(noLanguage);
-			component.setDesignation(newDesignations);
+			component.setDesignation(allDesignations.stream()
+					.filter(designation -> designation.getLanguage() == null || designationLang.isEmpty() || designationLang.contains(designation.getLanguage()))
+					.toList());
 		} else {
 			component.setDesignation(emptyList());
 		}

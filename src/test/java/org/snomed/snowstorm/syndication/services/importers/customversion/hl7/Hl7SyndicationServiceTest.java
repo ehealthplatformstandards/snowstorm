@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.MockedConstruction;
 import org.mockito.MockitoAnnotations;
 import org.snomed.snowstorm.core.data.services.ServiceException;
 import org.snomed.snowstorm.core.rf2.rf2import.ImportJob;
@@ -18,6 +19,7 @@ import org.snomed.snowstorm.syndication.services.importstatus.SyndicationImportS
 import org.snomed.snowstorm.syndication.models.data.SyndicationImport;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -56,6 +58,7 @@ class Hl7SyndicationServiceTest {
         MockitoAnnotations.openMocks(this);
         ReflectionTestUtils.setField(hl7SyndicationService, "workingDirectory", tempDir.toString());
         ReflectionTestUtils.setField(hl7SyndicationService, "fileNamePattern", "hl7.terminology.*.tgz");
+        ReflectionTestUtils.setField(hl7SyndicationService, "fhirVersion", "r4");
         fhirCodeSystemVersion = new FHIRCodeSystemVersion();
         doReturn(fhirCodeSystemVersion).when(codeSystemService).findCodeSystemVersion(any());
     }
@@ -64,7 +67,7 @@ class Hl7SyndicationServiceTest {
     void testImportHl7Terminology_Success() throws IOException {
         Path hl7File = tempDir.resolve("hl7.terminology.r4-6.2.0.tgz");
         Files.createFile(hl7File);
-        try (var ignored = mockStatic(CommandUtils.class)) {
+        try (var ignored = mockHl7DownloadProcess()) {
             assertDoesNotThrow(() -> hl7SyndicationService.fetchAndImportTerminology(new SyndicationImportParams(HL7, null, null)));
 
             verify(loadPackageService, times(1))
@@ -75,7 +78,7 @@ class Hl7SyndicationServiceTest {
 
     @Test
     void testImportHl7Terminology_FileNotFound() {
-        try (var ignored = mockStatic(CommandUtils.class)) {
+        try (var ignored = mockHl7DownloadProcess()) {
             hl7SyndicationService.fetchAndImportTerminology(new SyndicationImportParams(HL7,null, null));
 
             ArgumentCaptor<ImportJob.ImportStatus> captor = ArgumentCaptor.forClass(ImportJob.ImportStatus.class);
@@ -111,5 +114,16 @@ class Hl7SyndicationServiceTest {
             var params = new SyndicationImportParams(HL7, LATEST_VERSION, null);
             assertTrue(hl7SyndicationService.alreadyImported(params, importStatus));
         }
+    }
+
+    private MockedConstruction<ProcessBuilder> mockHl7DownloadProcess() {
+        return mockConstruction(ProcessBuilder.class, (processBuilder, context) -> {
+            Process process = mock(Process.class);
+            when(process.getInputStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
+            when(process.getErrorStream()).thenReturn(new ByteArrayInputStream(new byte[0]));
+            when(process.waitFor()).thenReturn(0);
+            when(processBuilder.directory(any(File.class))).thenReturn(processBuilder);
+            when(processBuilder.start()).thenReturn(process);
+        });
     }
 }

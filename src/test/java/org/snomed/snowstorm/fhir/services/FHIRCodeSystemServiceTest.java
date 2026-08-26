@@ -1,14 +1,15 @@
 package org.snomed.snowstorm.fhir.services;
 
 import org.hl7.fhir.r4.model.CodeSystem;
-import org.hl7.fhir.r4.model.OperationOutcome;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.snomed.snowstorm.core.data.services.CodeSystemService;
 import org.snomed.snowstorm.core.data.services.ServiceException;
 import org.snomed.snowstorm.fhir.domain.FHIRCodeSystemVersion;
+import org.snomed.snowstorm.validation.DroolsValidationService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 
 import java.util.List;
 
@@ -16,6 +17,7 @@ import static org.hl7.fhir.r4.model.OperationOutcome.IssueType.INVARIANT;
 import static org.hl7.fhir.r4.model.OperationOutcome.IssueType.NOTFOUND;
 import static org.junit.jupiter.api.Assertions.*;
 
+@MockBean(DroolsValidationService.class)
 class FHIRCodeSystemServiceTest extends AbstractFHIRTest {
 
 	@Autowired
@@ -71,7 +73,7 @@ class FHIRCodeSystemServiceTest extends AbstractFHIRTest {
 			codeSystemService.createUpdate(codeSystem);
 			fail(SHOULD_HAVE_THROWN_EXCEPTION_BEFORE_THIS_LINE);
 		} catch (SnowstormFHIRServerResponseException e) {
-			assertEquals(OperationOutcome.IssueType.NOTSUPPORTED, e.getIssueCode());
+			assertEquals(INVARIANT, e.getIssueCode());
 		}
 	}
 

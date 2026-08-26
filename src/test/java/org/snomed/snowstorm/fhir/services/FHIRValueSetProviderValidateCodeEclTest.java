@@ -4,6 +4,8 @@ import org.hl7.fhir.r4.model.Parameters;
 import org.hl7.fhir.r4.model.ValueSet;
 import org.junit.jupiter.api.Test;
 import org.snomed.snowstorm.core.data.domain.Concepts;
+import org.snomed.snowstorm.validation.DroolsValidationService;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 
@@ -13,6 +15,7 @@ import static java.lang.String.format;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.snomed.snowstorm.fhir.config.FHIRConstants.SNOMED_URI;
 
+@MockBean(DroolsValidationService.class)
 class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 
 	@Test
@@ -104,7 +107,7 @@ class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 						"&system=" + SNOMED_URI +
 						"&code=257751006" +
 						"&display=Baked potato",
-				false, "The code '257751006' was found in the ValueSet, however the display 'Baked potato' did not match any designations.");
+				false, "Wrong Display Name 'Baked potato'");
 	}
 
 	@Test
@@ -117,13 +120,13 @@ class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 						"&systemVersion=http://snomed.info/sct/1234000008",
 				false);
 
-		// Using incorrectly named "system-version" param
+		// The deprecated "system-version" alias is still supported.
 		validateCode(baseUrl + "/ValueSet/$validate-code?" +
 						"url=http://snomed.info/sct?fhir_vs" +
 						"&system=" + SNOMED_URI +
 						"&code=138875005" +
 						"&system-version=http://snomed.info/sct/900000000000207008",
-				400, "Parameter name 'system-version' is not applicable to this operation. Please use 'systemVersion' instead.");
+				true, "{\"name\":\"version\",\"valueString\":\"http://snomed.info/sct/900000000000207008/version/20190131\"}");
 
 		// Code "systemVersion" version matches the resolved value set version
 		validateCode(baseUrl + "/ValueSet/$validate-code?" +

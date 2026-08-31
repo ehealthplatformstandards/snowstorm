@@ -1,9 +1,6 @@
 name: Snowstorm CI
 
 on:
-  push:
-    branches:
-      - features/ako/refactoring_rebuild
   pull_request:
     branches:
       - master

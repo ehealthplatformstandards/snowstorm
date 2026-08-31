@@ -1,6 +1,6 @@
 package org.snomed.snowstorm.fhir.services;
 
-import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.hl7.fhir.r4.model.ValueSet;
@@ -42,7 +42,7 @@ class FHIRLoadPackageServiceTest extends AbstractFHIRTest {
 			if (files != null) {
 				for (File file : files) {
 					if (file.isFile()) {
-						ArchiveEntry archiveEntry = tarOut.createArchiveEntry(file, file.getName());
+						TarArchiveEntry archiveEntry = (TarArchiveEntry) tarOut.createArchiveEntry(file, file.getName());
 						tarOut.putArchiveEntry(archiveEntry);
 						Files.copy(file.toPath(), tarOut);
 						tarOut.closeArchiveEntry();

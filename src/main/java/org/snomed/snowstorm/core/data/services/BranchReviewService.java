@@ -17,6 +17,7 @@ import org.snomed.snowstorm.core.data.repositories.MergeReviewRepository;
 import org.snomed.snowstorm.core.pojo.LanguageDialect;
 import org.snomed.snowstorm.core.util.TimerUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -69,6 +70,7 @@ public class BranchReviewService {
 	private ConceptChangeHelper conceptChangeHelper;
 
 	@Autowired
+	@Lazy
 	private CodeSystemService codeSystemService;
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());

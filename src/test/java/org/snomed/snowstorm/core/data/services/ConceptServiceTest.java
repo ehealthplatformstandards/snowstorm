@@ -8,8 +8,10 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.ComponentService;
+import io.kaicode.elasticvc.api.VersionControlHelper;
 import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.elasticvc.domain.Commit;
+import io.kaicode.elasticvc.domain.Metadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -31,7 +33,6 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.security.core.context.SecurityContextHolder;
-import static org.snomed.snowstorm.core.data.services.CodeSystemService.SNOMEDCT;
 
 import java.io.IOException;
 import java.util.*;
@@ -2405,7 +2406,7 @@ class ConceptServiceTest extends AbstractTest {
 		concept = new Concept()
 				.addDescription(new Description("Vehicles (reference set)").setTypeId(FSN))
 				.addDescription(new Description("Vehicles reference set").setTypeId(SYNONYM))
-				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addAxiom(new Relationship(ISA, REFSET_SIMPLE))
 				.addRelationship(new Relationship(ISA, referenceSetId));
 		concept = conceptService.create(concept, intMain);
 		String vehiclesReferenceSetId = concept.getConceptId();
@@ -3011,6 +3012,270 @@ class ConceptServiceTest extends AbstractTest {
 		});
 	}
 
+	@Test
+	void copyConcepts_ShouldThrowException_WhenTargetIsVersionedBranch() throws ServiceException {
+		String intMain = "MAIN";
+		String extMain = "MAIN/SNOMEDCT-XX";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		Map<String, String> intAcceptable = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(ACCEPTABLE));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		Description description;
+		CodeSystem codeSystem;
+
+		// Create International Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20240101, "20240101");
+
+		// Create Extension
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", extMain));
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				extMain
+		);
+		String extModuleA = concept.getConceptId();
+		branchService.updateMetadata(extMain, Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleA, Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleA)));
+
+		// Create Extension concept
+		concept = new Concept()
+				.setModuleId(extModuleA)
+				.addDescription(new Description("Paracetamol (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Paracetamol").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, medicineId))
+				.addRelationship(new Relationship(ISA, medicineId));
+		concept = conceptService.create(concept, extMain);
+		String paracetamolId = concept.getConceptId();
+
+		// Version Extension
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20240102, "20240102");
+
+		// Copy Extension to International
+		assertThrows(ServiceException.class, () -> {
+			conceptService.copyConcepts("<< " + paracetamolId, extMain, "MAIN/2024-01-01", true);
+		});
+
+		// Assert copying failed
+		concept = conceptService.find(paracetamolId, "MAIN/2024-01-01");
+		assertNull(concept);
+	}
+
+	@Test
+	void update_ShouldCreateCNC_WhenNothingConfigured() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Assert
+		concept = conceptService.find(medicineId, intMain);
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+
+		// Inactivate Concept
+		concept = conceptService.find(medicineId, intMain);
+		concept.setActive(false);
+		concept = conceptService.update(concept, intMain);
+
+		// Assert
+		assertEquals(1, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(1, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+	}
+
+	@Test
+	void update_ShouldCreateCNC_WhenEnabled() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Configure for CNC
+		setCncEnabled(intMain, true);
+
+		// Create Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Assert
+		concept = conceptService.find(medicineId, intMain);
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+
+		// Inactivate Concept
+		concept = conceptService.find(medicineId, intMain);
+		concept.setActive(false);
+		concept = conceptService.update(concept, intMain);
+
+		// Assert
+		assertEquals(1, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(1, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+	}
+
+	@Test
+	void update_ShouldNotCreateCNC_WhenDisabled() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Configure for CNC
+		setCncEnabled(intMain, false);
+
+		// Create Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Assert
+		concept = conceptService.find(medicineId, intMain);
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+
+		// Inactivate Concept
+		concept = conceptService.find(medicineId, intMain);
+		concept.setActive(false);
+		concept = conceptService.update(concept, intMain);
+
+		// Assert
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+	}
+
+	@Test
+	void update_ShouldNotCreateCNC_WhenDisabledYetRequestedTo() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Configure for CNC
+		setCncEnabled(intMain, false);
+
+		// Create Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Assert
+		concept = conceptService.find(medicineId, intMain);
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+
+		// Inactivate Concept
+		concept = conceptService.find(medicineId, intMain);
+		concept.setActive(false);
+		// User explicitly asks for CNC
+		getDescriptionByTerm(concept, "Medicine").setInactivationIndicator("CONCEPT_NON_CURRENT");
+		concept = conceptService.update(concept, intMain);
+
+		// Assert
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+	}
+
+	@Test
+	void update_ShouldThrowException_WhenRequestingUnknownInactivationIndicator() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Configure for CNC
+		setCncEnabled(intMain, false);
+
+		// Create Concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version International
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Assert
+		concept = conceptService.find(medicineId, intMain);
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine (medicine)").getInactivationIndicatorMembers().size());
+		assertEquals(0, getDescriptionByTerm(concept, "Medicine").getInactivationIndicatorMembers().size());
+
+		// Inactivate Concept
+		concept = conceptService.find(medicineId, intMain);
+		concept.setActive(false);
+		// User explicitly asks for CNC
+		getDescriptionByTerm(concept, "Medicine").setInactivationIndicator("I_DONT_EXIST");
+
+		// Assert exception thrown
+		Concept finalConcept = concept;
+		assertThrows(IllegalArgumentException.class, () -> {
+			conceptService.update(finalConcept, intMain);
+		});
+	}
+
+	private void setCncEnabled(String branchPath, boolean value) {
+		Branch branchOrThrow = branchService.findBranchOrThrow(branchPath, true);
+		Metadata metadata = branchOrThrow.getMetadata();
+		metadata.putString(Config.CNC_ENABLED, String.valueOf(value));
+		branchService.updateMetadata(branchPath, metadata);
+	}
+
 	private Description getDescriptionByTerm(Concept concept, String term) {
 		if (concept == null) {
 			return null;
@@ -3029,6 +3294,52 @@ class ConceptServiceTest extends AbstractTest {
 		assertTrue(concept.isReleased());
 		assertEquals(effectiveTime, concept.getReleasedEffectiveTime());
 		assertEquals(effectiveTime, concept.getEffectiveTimeI());
+	}
+
+	@Test
+	void testSearchConceptsOnCodeSystemBranchWithMultipleDependencies() throws ServiceException {
+		// Create a concept on MAIN
+		conceptService.create(new Concept("100001").addDescription(new Description("Heart rate")).addFSN("Heart rate (observable entity)"), "MAIN");
+		
+		// Versioning MAIN
+		codeSystemService.createVersion(codeSystem, 20240101, "20240101 Release");
+
+		// Create a code system SNOMEDCT-LOINC with a dependency on MAIN
+		CodeSystem loinc = codeSystemService.createCodeSystem(new CodeSystem("LOINC", "MAIN/SNOMEDCT-LOINC"));
+
+		// Create a concept on MAIN/SNOMEDCT-LOINC
+		conceptService.create(new Concept("100002").addDescription(new Description("Heart part")).addFSN("Heart part (body structure)"), "MAIN/SNOMEDCT-LOINC");
+		
+		// Version loinc
+		codeSystemService.createVersion(loinc, 20240201, "20240201 Release");
+		
+		// Create an extension code system SNOMEDCT-TEST with dependencies on MAIN and MAIN/SNOMEDCT-LOINC
+		CodeSystem extension = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-TEST", "MAIN/SNOMEDCT-TEST"));
+		branchService.updateMetadata("MAIN/SNOMEDCT-TEST", ImmutableMap.of(VersionControlHelper.ADDITIONAL_DEPENDENT_BRANCHES, "MAIN/SNOMEDCT-LOINC/2024-02-01"));
+
+		// Create a new concept on MAIN and should not visible to SNOMEDCT-TEST
+		conceptService.create(new Concept("100003").addDescription(new Description("Heart beat")).addFSN("Heart beat (observable entity)"), "MAIN");
+
+		// Create a new concept on MAIN/SNOMEDCT-LOINC and should not visible to SNOMEDCT-TEST
+		conceptService.create(new Concept("100004").addDescription(new Description("Heart beat")).addFSN("Heart beat (observable entity)"), "MAIN/SNOMEDCT-LOINC");
+
+		// Create a new on MAIN/SNOMEDCT-TEST and should be visible on SNOMEDCT-TEST
+		branchService.create("MAIN/SNOMEDCT-TEST/TEST");
+		conceptService.create(new Concept("100005").addDescription(new Description("Heartburn")).addFSN("Heartburn (finding)"), "MAIN/SNOMEDCT-TEST/TEST");
+
+		// Search for concepts on MAIN/SNOMEDCT-TEST
+		Page<Concept> concepts = conceptService.findAll("MAIN/SNOMEDCT-TEST/TEST", PageRequest.of(0, 100));
+		assertEquals(3, concepts.getTotalElements());
+		for (Concept concept : concepts) {
+			assertNotNull(concept.getDescriptions());
+			assertEquals(2, concept.getDescriptions().size());
+		}
+
+		// Search descriptions on MAIN/SNOMEDCT-TEST
+		Page<Description> descriptions = descriptionService.findDescriptions("MAIN/SNOMEDCT-TEST/TEST", null, null, Set.of("100001", "100002", "100005"), PageRequest.of(0, 100));
+		assertEquals(6, descriptions.getTotalElements());
+		descriptions = descriptionService.findDescriptions("MAIN/SNOMEDCT-TEST/TEST", "Heartburn", null, null, PageRequest.of(0, 100));
+		assertEquals(1, descriptions.getTotalElements());
 	}
 
 	private boolean waitUntil(Supplier<Boolean> supplier, int maxSecondsToWait) {

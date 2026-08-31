@@ -1,20 +1,22 @@
 package org.snomed.snowstorm.core.data.services;
 
-import org.snomed.snowstorm.core.data.domain.ReferenceSetTypeExportConfiguration;
+import org.snomed.snowstorm.core.data.domain.ReferenceSetType;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 public class ReferenceSetTypesConfigurationService {
 
-	private final Map<String, String> types = new HashMap<>();
+	private Map<String, String> types = new HashMap<>();
 
 	public Map<String, String> getTypes() {
 		return types;
 	}
 
-	public List<ReferenceSetTypeExportConfiguration> getConfiguredTypes() {
-		Set<ReferenceSetTypeExportConfiguration> setTypes = new HashSet<>();
+	public Set<ReferenceSetType> getConfiguredTypes() {
+		Set<ReferenceSetType> setTypes = new HashSet<>();
 		for (String key : types.keySet()) {
 			String name = key.substring(key.lastIndexOf(".") + 1);
 			String configString = types.get(key);
@@ -31,9 +33,9 @@ public class ReferenceSetTypesConfigurationService {
 				fieldTypes = split[2];
 				fieldNames = split[3];
 			}
-			setTypes.add(new ReferenceSetTypeExportConfiguration(conceptId, name, fieldNames, fieldTypes, exportDir));
+			setTypes.add(new ReferenceSetType(name, conceptId, fieldNames, fieldTypes, exportDir));
 		}
-		return setTypes.stream().sorted(Comparator.comparing(ReferenceSetTypeExportConfiguration::getName)).collect(Collectors.toList());
+		return setTypes;
 	}
 
 }

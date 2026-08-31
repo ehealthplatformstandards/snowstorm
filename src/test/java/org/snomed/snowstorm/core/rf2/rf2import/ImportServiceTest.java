@@ -837,7 +837,7 @@ class ImportServiceTest extends AbstractTest {
 
 		// Check that semantic index is not completely rebuilt and in this case should only be increased by 2
 		results = queryConceptRepository.findAll(PageRequest.of(0, 10));
-		assertEquals(60, results.getTotalElements());
+		assertEquals(61, results.getTotalElements());
 	}
 
 	@Test
@@ -859,6 +859,29 @@ class ImportServiceTest extends AbstractTest {
 		ImportJob importJob = importService.getImportJobOrThrow(importJobId);
 		assertEquals(ImportJob.ImportStatus.COMPLETED, importJob.getStatus());
 		concepts = conceptService.findAll(MAIN, PageRequest.of(0, 10));
-		assertEquals(18, concepts.getTotalElements());
+		assertEquals(20, concepts.getTotalElements());
+	}
+
+	@Test
+	void testImportWithAdditionalDependency() throws IOException, ReleaseImportException {
+		// Create LOINC code system and version
+		CodeSystem loinc = new CodeSystem("SNOMEDCT-LOINC", "MAIN/SNOMEDCT-LOINC");
+		codeSystemService.createCodeSystem(loinc);
+		codeSystemService.createVersion(loinc, 20250321, "LOINC 2025-03-21 release");
+		// Create a new code system
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-TEST", "MAIN/SNOMEDCT-TEST"));
+		// Add additional dependency in branch medata
+		branchService.updateMetadata("MAIN/SNOMEDCT-TEST", Collections.singletonMap("vc.additional-dependent-branches", List.of("MAIN/SNOMEDCT-LOINC/2025-03-21")));
+		// Test import
+		String importJobId = importService.createJob(RF2Type.SNAPSHOT, "MAIN/SNOMEDCT-TEST", false, false);
+		File zipFile = ZipUtil.zipDirectoryRemovingCommentsAndBlankLines("src/test/resources/dummy-snomed-content/SnomedCT_MiniRF2/Snapshot");
+		FileInputStream releaseFileStream = new FileInputStream(zipFile);
+		importService.importArchive(importJobId, releaseFileStream);
+		Page<Concept> concepts = conceptService.findAll("MAIN/SNOMEDCT-TEST", PageRequest.of(0, 10));
+		assertEquals(13, concepts.getTotalElements());
+		MemberSearchRequest languageMemberRequest = new MemberSearchRequest();
+		languageMemberRequest.referenceSet("900000000000509007");
+		Page<ReferenceSetMember> languageMembers = referenceSetMemberService.findMembers("MAIN/SNOMEDCT-TEST", languageMemberRequest, PageRequest.of(0, 10));
+		assertEquals(2, languageMembers.getContent().size());
 	}
 }

@@ -16,6 +16,7 @@ import org.snomed.snowstorm.core.util.PageHelper;
 import org.snomed.snowstorm.ecl.domain.RefinementBuilder;
 import org.snomed.snowstorm.ecl.domain.RefinementBuilderImpl;
 import org.snomed.snowstorm.ecl.domain.expressionconstraint.SExpressionConstraint;
+import org.snomed.snowstorm.ecl.domain.expressionconstraint.SRefinedExpressionConstraint;
 import org.snomed.snowstorm.rest.converter.SearchAfterHelper;
 import org.snomed.snowstorm.rest.pojo.SearchAfterPageRequest;
 import org.springframework.data.domain.*;
@@ -53,10 +54,12 @@ public class ConceptSelectorHelper {
 			Collection<Long> conceptIdFilter, PageRequest pageRequest, ECLContentService eclContentService, boolean triedCache) {
 
 		BoolQuery.Builder queryBuilder = bool().must(getBranchAndStatedQuery(branchCriteria.getEntityBranchCriteria(QueryConcept.class), stated));
-		RefinementBuilder refinementBuilder = new RefinementBuilderImpl(queryBuilder, branchCriteria, stated, eclContentService);
-
 		// This can add an inclusionFilter to the refinementBuilder or run pre-selections to apply filters
-
+		RefinementBuilder refinementBuilder = new RefinementBuilderImpl(queryBuilder, branchCriteria, stated, eclContentService);
+		// Check if it should prefetch memberOfQueryResults
+		if (refinementBuilder.shouldPrefetchMemberOfQueryResults() == null) {
+			refinementBuilder.setShouldPrefetchMemberOfQueryResults(!(sExpressionConstraint instanceof SRefinedExpressionConstraint));
+		}
 		PrefetchResult prefetchResult = new PrefetchResult();
 		sExpressionConstraint.addCriteria(refinementBuilder, prefetchResult::set, triedCache);
 
@@ -78,7 +81,7 @@ public class ConceptSelectorHelper {
 
 		NativeQueryBuilder searchQueryBuilder = new NativeQueryBuilder()
 				.withQuery(query)
-				.withSourceFilter(new FetchSourceFilter(new String[]{QueryConcept.Fields.CONCEPT_ID}, null));
+				.withSourceFilter(new FetchSourceFilter(true, new String[]{QueryConcept.Fields.CONCEPT_ID}, null));
 
 		if (filterByConceptIds != null) {
 			searchQueryBuilder.withFilter(termsQuery(QueryConcept.Fields.CONCEPT_ID, filterByConceptIds));
@@ -123,7 +126,7 @@ public class ConceptSelectorHelper {
 
 		NativeQueryBuilder searchQueryBuilder = new NativeQueryBuilder()
 				.withQuery(query)
-				.withSourceFilter(new FetchSourceFilter(getRequiredFields(inclusionFilter), null));
+				.withSourceFilter(new FetchSourceFilter(true, getRequiredFields(inclusionFilter), null));
 
 		if (filterByConceptIds != null) {
 			searchQueryBuilder.withFilter(termsQuery(QueryConcept.Fields.CONCEPT_ID, filterByConceptIds));

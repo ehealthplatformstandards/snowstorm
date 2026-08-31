@@ -1,7 +1,9 @@
 package org.snomed.snowstorm.core.data.services;
 
 import com.google.common.collect.Lists;
-import io.kaicode.elasticvc.api.VersionControlHelper;
+import io.kaicode.elasticvc.api.BranchService;
+import io.kaicode.elasticvc.domain.Branch;
+import io.kaicode.elasticvc.domain.Commit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,11 +19,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 
 import static java.lang.Long.parseLong;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,7 +28,6 @@ import static org.snomed.snowstorm.core.data.domain.Concepts.*;
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = TestConfig.class)
 class QueryServiceTest extends AbstractTest {
-
 	@Autowired
 	private QueryService service;
 
@@ -41,22 +38,27 @@ class QueryServiceTest extends AbstractTest {
 	private CodeSystemService codeSystemService;
 
 	@Autowired
-	private VersionControlHelper versionControlHelper;
+	private BranchService branchService;
+
+	@Autowired
+	private ReferenceSetMemberService referenceSetMemberService;
 
 	private static final PageRequest PAGE_REQUEST = PageRequest.of(0, 50);
 	public static final String PATH = "MAIN";
 	public static final int TEST_ET = 20210131;
-	private final static String MODEL_COMPONENT = "900000000000441003";
-	private final static String BODY_STRUCTURE = "123037004";
-	private final static String LATERALITY = "272741003";
-	private final static String RIGHT = "24028007";
-	private final static String PULMONARY_VALVE_STRUCTURE = "39057004";
-	private final static String DISORDER = "64572001";
-	private final static String PENTALOGY_OF_FALLOT = "204306007";
-	private final static String ASSOCIATED_MORPHOLOGY = "116676008";
-	private final static String STENOSIS = "415582006";
-	private final static String HYPERTROPHY = "56246009";
+	private static final String MODEL_COMPONENT = "900000000000441003";
+	private static final String BODY_STRUCTURE = "123037004";
+	private static final String LATERALITY = "272741003";
+	private static final String RIGHT = "24028007";
+	private static final String PULMONARY_VALVE_STRUCTURE = "39057004";
+	private static final String DISORDER = "64572001";
+	private static final String PENTALOGY_OF_FALLOT = "204306007";
+	private static final String ASSOCIATED_MORPHOLOGY = "116676008";
+	private static final String STENOSIS = "415582006";
+	private static final String HYPERTROPHY = "56246009";
 	private static final String RIGHT_VENTRICULAR_STRUCTURE = "53085002";
+	private static final String LATERALITY_REFSET = "703870008";
+	private static final String QUALIFIER_VALUE = "362981000";
 
 	private Concept root;
 	private Concept pizza_2;
@@ -223,7 +225,7 @@ class QueryServiceTest extends AbstractTest {
 	}
 
 	@Test
-	public void testModuleFilter() {
+	void testModuleFilter() {
 		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
 		assertEquals(5, service.search(queryBuilder, PATH, PAGE_REQUEST).getTotalElements());
 
@@ -242,37 +244,31 @@ class QueryServiceTest extends AbstractTest {
 
 	@Test
 	void testDotNotationEclQuery() throws ServiceException {
-		createConceptsForDotNotationTests();
+		createConcepts();
 
 		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
 		// Dot notation
 		String ecl = "( *: 116676008 |Associated morphology (attribute)|= 415582006 |Stenosis (morphologic abnormality)|). 363698007 |Finding site (attribute)|";
 		queryBuilder.ecl(ecl);
 		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
-		System.out.println("Dot notation query results:");
-		results.forEach(ConceptMini::getFsnTerm);
 		assertEquals(2, results.size());
 
 		// Add term filtering
 		queryBuilder.descriptionTerm("structure");
 
 		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
-		System.out.println("Dot notation query results with term filter:");
-		results.forEach(ConceptMini::getFsnTerm);
 		assertEquals(2, results.size());
 
 		// Reverse flag
 		ecl = "* : R 363698007 |Finding site (attribute)| = (* : 116676008 |Associated morphology (attribute)| = 415582006 |Stenosis (morphologic abnormality)|)";
 		queryBuilder.ecl(ecl);
 		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
-		System.out.println("Reverse flag query results:");
-		results.forEach(ConceptMini::getFsnTerm);
 		assertEquals(2, results.size());
 	}
 
 	@Test
 	void testDotNotationEclQueryWithSearchAfter() throws ServiceException {
-		createConceptsForDotNotationTests();
+		createConcepts();
 
 		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
 		String ecl = "( *: 116676008 |Associated morphology (attribute)|= 415582006 |Stenosis (morphologic abnormality)|). 363698007 |Finding site (attribute)|";
@@ -282,20 +278,164 @@ class QueryServiceTest extends AbstractTest {
 
 		ItemsPage<ConceptMini> resultsPageOne = new ItemsPage<>(service.search(queryBuilder, PATH, SearchAfterPageRequest.of(0, 1, sort)));
 		assertEquals(1, resultsPageOne.getItems().size());
-		ConceptMini conceptPageOne = resultsPageOne.getItems().stream().collect(Collectors.toList()).get(0);
+		ConceptMini conceptPageOne = resultsPageOne.getItems().stream().toList().get(0);
 		assertEquals(RIGHT_VENTRICULAR_STRUCTURE, conceptPageOne.getConceptId());
 
 		ItemsPage<ConceptMini> resultsPageTwo = new ItemsPage<>(service.search(queryBuilder, PATH, SearchAfterPageRequest.of(resultsPageOne.getSearchAfterArray(), 1, sort)));
 		assertEquals(1, resultsPageTwo.getItems().size());
-		ConceptMini conceptPageTwo = resultsPageTwo.getItems().stream().collect(Collectors.toList()).get(0);
+		ConceptMini conceptPageTwo = resultsPageTwo.getItems().stream().toList().get(0);
 		assertEquals(PULMONARY_VALVE_STRUCTURE, conceptPageTwo.getConceptId());
 
 		assertNotEquals(resultsPageOne.getSearchAfter(), resultsPageTwo.getSearchAfter());
 	}
 
-	private void createConceptsForDotNotationTests() throws ServiceException {
+	@Test
+	void testNestedMemberOfQueries()throws ServiceException {
+		createConcepts();
+		createMembers(MAIN, REFSET_SIMPLE, List.of(STENOSIS, HYPERTROPHY));
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
+		String ecl = "^ 446609009";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+
+		ecl = "(^ 446609009)";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+
+		ecl = "^(<<900000000000455006)";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+	}
+
+	@Test
+	void testRefinedExpressionConstraintWithMemberOf()throws ServiceException {
+		createConcepts();
+		createMembers(MAIN, REFSET_SIMPLE, List.of(STENOSIS, HYPERTROPHY));
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
+		String ecl = "^446609009:116676008 |Associated morphology (attribute)|=*";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(0, results.size());
+
+		createMembers(MAIN, REFSET_SIMPLE, List.of(PENDING_MOVE, PENTALOGY_OF_FALLOT));
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(1, results.size());
+		assertEquals(PENTALOGY_OF_FALLOT, results.get(0).getConceptId());
+
+		// Add new member on a project
+		Branch projectA = branchService.create("MAIN/ProjectA");
+		Concept testConcept = new Concept("200001")
+						.addRelationship(new Relationship(ISA, DISORDER))
+						.addRelationship(new Relationship(FINDING_SITE, PULMONARY_VALVE_STRUCTURE).setGroupId(1))
+						.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, STENOSIS).setGroupId(1))
+						.addRelationship(new Relationship(FINDING_SITE, RIGHT_VENTRICULAR_STRUCTURE).setGroupId(2))
+						.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, HYPERTROPHY).setGroupId(2));
+		conceptService.create(testConcept, projectA.getPath());
+		createMembers(projectA.getPath(), REFSET_SIMPLE, List.of("200001"));
+		results = service.search(queryBuilder, projectA.getPath(), PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+		List<String> actual = results.stream().map(ConceptMini::getConceptId).toList();
+		assertTrue(actual.containsAll(List.of("200001", PENTALOGY_OF_FALLOT)));
+
+		// Delete refset member for PENTALOGY_OF_FALLOT
+		Page<ReferenceSetMember> members = referenceSetMemberService.findMembers(projectA.getPath(), PENTALOGY_OF_FALLOT, PageRequest.ofSize(1));
+		assertEquals(1, members.getTotalElements());
+		ReferenceSetMember member = members.getContent().get(0);
+		referenceSetMemberService.deleteMember(projectA.getPath(), member.getMemberId());
+		results = service.search(queryBuilder, projectA.getPath(), PAGE_REQUEST).getContent();
+		assertEquals(1, results.size());
+		actual = results.stream().map(ConceptMini::getConceptId).toList();
+		assertEquals("200001", actual.get(0));
+	}
+
+	@Test
+	void testNestedMemberOfQueryWithPartialLookupAvailable() throws ServiceException {
+		createConcepts();
+		createMembers(MAIN, REFSET_SIMPLE, List.of(STENOSIS, HYPERTROPHY));
+		createMembers(MAIN, LATERALITY_REFSET, List.of(RIGHT_VENTRICULAR_STRUCTURE));
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
+		String ecl = "^(<<446609009)";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(3, results.size());
+
+		ecl = "^" + LATERALITY_REFSET;
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(1, results.size());
+
+		ecl = "^(<<446609009):116676008 |Associated morphology (attribute)|=*";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(0, results.size());
+
+		ecl = "^(<<446609009):272741003=*";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(1, results.size());
+	}
+	
+	@Test
+	void testDotNotationEclWithMemberOf() throws ServiceException {
+		createConcepts();
+		createMembers(MAIN, REFSET_SIMPLE, List.of(STENOSIS, HYPERTROPHY));
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
+		String ecl = "( *: 116676008 |Associated morphology (attribute)|= ^446609009).363698007|Finding site (attribute)|";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+		assertEquals(RIGHT_VENTRICULAR_STRUCTURE, results.get(0).getConceptId());
+		assertEquals(PULMONARY_VALVE_STRUCTURE, results.get(1).getConceptId());
+
+		createMembers(MAIN, REFSET_SIMPLE, List.of(PENDING_MOVE, PENTALOGY_OF_FALLOT));
+		ecl = "^446609009.116676008 |Associated morphology (attribute)|";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+		assertEquals(STENOSIS, results.get(0).getConceptId());
+		assertEquals(HYPERTROPHY, results.get(1).getConceptId());
+	}
+
+	@Test
+	void testDotNotationEclWithMemberOfForStatedView() throws ServiceException {
+		createConcepts();
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(true).activeFilter(true);
+		createMembers(MAIN, REFSET_SIMPLE, List.of(PENDING_MOVE, PENTALOGY_OF_FALLOT));
+		String ecl = "^446609009.116676008 |Associated morphology (attribute)|";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(0, results.size());
+	}
+
+	@Test
+	void testCompoundExpressionWithMemberOf() throws ServiceException {
+		createConcepts();
+		createMembers(MAIN, REFSET_SIMPLE, List.of(STENOSIS, HYPERTROPHY, "116676008"));
+		QueryService.ConceptQueryBuilder queryBuilder = service.createQueryBuilder(false).activeFilter(true);
+		String ecl = "(^446609009) AND (<<123037004)";
+		queryBuilder.ecl(ecl);
+		List<ConceptMini> results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(2, results.size());
+
+		ecl = "(<<123037004) MINUS (^446609009)";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(3, results.size());
+
+		ecl = "(^446609009) MINUS (<<123037004)";
+		queryBuilder.ecl(ecl);
+		results = service.search(queryBuilder, PATH, PAGE_REQUEST).getContent();
+		assertEquals(1, results.size());
+	}
+
+	private void createConcepts() throws ServiceException {
 		List<Concept> allConcepts = new ArrayList<>();
 		allConcepts.add(new Concept(ISA).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
+		allConcepts.add(new Concept(REFSET_SIMPLE).addRelationship(new Relationship(ISA, REFSET)));
+		allConcepts.add(new Concept(REFSET).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
 		allConcepts.add(new Concept(MODEL_COMPONENT).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
 		allConcepts.add(new Concept(CONCEPT_MODEL_ATTRIBUTE).addRelationship(new Relationship(ISA, MODEL_COMPONENT)));
 		allConcepts.add(new Concept(CONCEPT_MODEL_OBJECT_ATTRIBUTE).addRelationship(new Relationship(ISA, CONCEPT_MODEL_ATTRIBUTE)));
@@ -304,6 +444,10 @@ class QueryServiceTest extends AbstractTest {
 		allConcepts.add(new Concept(BODY_STRUCTURE).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
 		allConcepts.add(new Concept(CLINICAL_FINDING).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
 		allConcepts.add(new Concept(DISORDER).addRelationship(new Relationship(ISA, CLINICAL_FINDING)));
+		allConcepts.add(new Concept(LATERALITY_REFSET).addRelationship(new Relationship(ISA, REFSET_SIMPLE)));
+		allConcepts.add(new Concept(LATERALITY).addRelationship(new Relationship(ISA, CONCEPT_MODEL_OBJECT_ATTRIBUTE)));
+		allConcepts.add(new Concept(QUALIFIER_VALUE).addRelationship(new Relationship(ISA, SNOMEDCT_ROOT)));
+		allConcepts.add(new Concept(RIGHT).addRelationship(new Relationship(ISA, QUALIFIER_VALUE)));
 
 		allConcepts.add(new Concept(RIGHT_VENTRICULAR_STRUCTURE)
 				.addFSN("Right cardiac ventricular structure (body structure)")
@@ -324,42 +468,23 @@ class QueryServiceTest extends AbstractTest {
 				.addRelationship(new Relationship(FINDING_SITE, RIGHT_VENTRICULAR_STRUCTURE).setGroupId(2))
 				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, HYPERTROPHY).setGroupId(2))
 		);
-
 		conceptService.batchCreate(allConcepts, MAIN);
 	}
 
-	@Test
-	void testMatchModel() throws ServiceException {
-		// Setup concept with one group
-		conceptService.create(new Concept("1" + PENTALOGY_OF_FALLOT)
-				.addRelationship(new Relationship(ISA, DISORDER))
-				.addRelationship(new Relationship(FINDING_SITE, PULMONARY_VALVE_STRUCTURE).setGroupId(1))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, STENOSIS).setGroupId(1))
-				, MAIN);
-
-		// Setup concept with two groups
-		Concept savedConcept = conceptService.create(new Concept(PENTALOGY_OF_FALLOT)
-				.addRelationship(new Relationship(ISA, DISORDER))
-				.addRelationship(new Relationship(FINDING_SITE, PULMONARY_VALVE_STRUCTURE).setGroupId(1))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, STENOSIS).setGroupId(1))
-				.addRelationship(new Relationship(FINDING_SITE, RIGHT_VENTRICULAR_STRUCTURE).setGroupId(2))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, HYPERTROPHY).setGroupId(2))
-				, MAIN);
-
-		// Setup concept with three groups
-		conceptService.create(new Concept("2" + PENTALOGY_OF_FALLOT)
-				.addRelationship(new Relationship(ISA, DISORDER))
-				.addRelationship(new Relationship(FINDING_SITE, PULMONARY_VALVE_STRUCTURE).setGroupId(1))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, STENOSIS).setGroupId(1))
-				.addRelationship(new Relationship(FINDING_SITE, RIGHT_VENTRICULAR_STRUCTURE).setGroupId(2))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, STENOSIS).setGroupId(2))
-				.addRelationship(new Relationship(FINDING_SITE, RIGHT_VENTRICULAR_STRUCTURE).setGroupId(3))
-				.addRelationship(new Relationship(ASSOCIATED_MORPHOLOGY, HYPERTROPHY).setGroupId(3))
-				, MAIN);
-
-		// Attempt to fetch the concept with two groups by matching the model against the semantic index
-		String conceptId = service.findConceptWithMatchingInferredRelationships(savedConcept.getRelationships(), versionControlHelper.getBranchCriteria(MAIN));
-		assertEquals(savedConcept.getId(), conceptId);
+	private void createMembers(String branchPath, String refsetId, List<String> referencedConcepts) {
+		Set<ReferenceSetMember> members = new HashSet<>();
+		for (String conceptId : referencedConcepts) {
+			ReferenceSetMember member = new ReferenceSetMember();
+			member.setRefsetId(refsetId);
+			member.setReferencedComponentId(conceptId);
+			member.setModuleId(Concepts.CORE_MODULE);
+			member.setPath(branchPath);
+			members.add(member);
+		}
+		try (Commit commit = branchService.openCommit(branchPath, "Testing")) {
+			referenceSetMemberService.doSaveBatchMembers(members, commit);
+			commit.markSuccessful();
+		}
+		referenceSetMemberService.createMembers(branchPath, members);
 	}
-
 }

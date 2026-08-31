@@ -8,9 +8,10 @@ import org.snomed.snowstorm.core.data.domain.Description;
 import org.snomed.snowstorm.rest.ControllerHelper;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.snomed.snowstorm.core.data.domain.Concepts.GB_EN_LANG_REFSET;
 import static org.snomed.snowstorm.core.data.domain.Concepts.US_EN_LANG_REFSET;
 
@@ -70,8 +71,8 @@ class DescriptionHelperTest {
 		assertEquals("Jet airplane", getPtTerm(null, descriptions));
 		assertEquals("Jet airplane", getPtTerm(Config.DEFAULT_ACCEPT_LANG_HEADER, descriptions));
 		assertEquals("Jet aeroplane", getPtTerm("en-X-" + GB_EN_LANG_REFSET, descriptions));
-		assertEquals("Fallback on US english defaults.", "Jet airplane", getPtTerm("en-X-" + danishLanguageReferenceSet, descriptions));
-		assertEquals("Fallback on GB english because of header.", "Jet aeroplane", getPtTerm("en-X-" + danishLanguageReferenceSet + ",en-X-" + GB_EN_LANG_REFSET, descriptions));
+		assertEquals("Jet airplane", getPtTerm("en-X-" + danishLanguageReferenceSet, descriptions), "Fallback on US english defaults.");
+		assertEquals("Jet aeroplane", getPtTerm("en-X-" + danishLanguageReferenceSet + ",en-X-" + GB_EN_LANG_REFSET, descriptions), "Fallback on GB english because of header.");
 		assertEquals("Bjetfly", getPtTerm("da-X-" + danishLanguageReferenceSet, descriptions));
 		assertEquals("Bjetfly", getPtTerm("da", descriptions));
 	}
@@ -79,10 +80,30 @@ class DescriptionHelperTest {
 	@Test
 	void testPickFSNUsingLangOnlyWhenNoLangRefset() {
 		final HashSet<Description> descriptionWithNoAcceptability = Sets.newHashSet(new Description("Neoplasm and/or hamartoma reference set (foundation metadata concept)").setTypeId(Concepts.FSN));
-		assertEquals("Pick FSN with correct language when only language requested.",
-				"Neoplasm and/or hamartoma reference set (foundation metadata concept)", getFSNTerm("en", descriptionWithNoAcceptability));
-		assertEquals("Pick FSN with correct language when language dialect requested because 'en' is always included as fallback.",
-				"Neoplasm and/or hamartoma reference set (foundation metadata concept)", getFSNTerm("en-X-900000000000509007", descriptionWithNoAcceptability));
+		assertEquals("Neoplasm and/or hamartoma reference set (foundation metadata concept)",
+				getFSNTerm("en", descriptionWithNoAcceptability),
+				"Pick FSN with correct language when only language requested.");
+		assertEquals("Neoplasm and/or hamartoma reference set (foundation metadata concept)",
+				getFSNTerm("en-X-900000000000509007", descriptionWithNoAcceptability),
+				"Pick FSN with correct language when language dialect requested because 'en' is always included as fallback.");
+	}
+
+	@Test
+	void stripElisions_ShouldReturnExpected() {
+		List<String> input = List.of(
+				"l'intervention", "d'accord", "qu'il", "L'Intervention",
+				"l\u2019intervention", "d\u2019accord",
+				"intervention", "atlas-axis"
+		);
+		List<String> expected = List.of(
+				"intervention", "accord", "il", "Intervention",
+				"intervention", "accord",
+				"intervention", "atlas-axis"
+		);
+
+		for (int i = 0; i < input.size(); i++) {
+			assertEquals(expected.get(i), DescriptionHelper.stripElisions(input.get(i)), "stripElisions(\"" + input.get(i) + "\")");
+		}
 	}
 
 	private String getPtTerm(String acceptLanguageHeader, Set<Description> descriptions) {

@@ -1,8 +1,9 @@
 package org.snomed.snowstorm.extension;
 
-import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery;
 import io.kaicode.elasticvc.api.BranchCriteria;
 import io.kaicode.elasticvc.api.BranchService;
+import io.kaicode.elasticvc.api.PathUtil;
 import io.kaicode.elasticvc.api.VersionControlHelper;
 import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.elasticvc.domain.Commit;
@@ -11,15 +12,8 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.snomed.snowstorm.core.data.domain.CodeSystem;
-import org.snomed.snowstorm.core.data.domain.Concepts;
-import org.snomed.snowstorm.core.data.domain.Description;
-import org.snomed.snowstorm.core.data.domain.ReferenceSetMember;
-import org.snomed.snowstorm.core.data.services.BranchMetadataHelper;
-import org.snomed.snowstorm.core.data.services.CodeSystemVersionService;
-import org.snomed.snowstorm.core.data.services.NotFoundException;
-import org.snomed.snowstorm.core.data.services.ReferenceSetMemberService;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.snomed.snowstorm.core.data.domain.*;
+import org.snomed.snowstorm.core.data.services.*;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
@@ -32,11 +26,9 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
-import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.range;
 import static com.google.common.collect.Iterables.partition;
 import static io.kaicode.elasticvc.api.ComponentService.LARGE_PAGE;
-import static io.kaicode.elasticvc.helper.QueryHelper.termQuery;
-import static io.kaicode.elasticvc.helper.QueryHelper.termsQuery;
+import static io.kaicode.elasticvc.helper.QueryHelper.*;
 import static org.snomed.snowstorm.core.data.domain.Description.Fields.DESCRIPTION_ID;
 import static org.snomed.snowstorm.core.data.domain.Description.Fields.TYPE_ID;
 import static org.snomed.snowstorm.core.data.domain.ReferenceSetMember.Fields.*;
@@ -49,26 +41,36 @@ import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.REQUIRE
 
 @Service
 public class ExtensionAdditionalLanguageRefsetUpgradeService {
+	private final BranchService branchService;
+	private final BranchMetadataHelper branchMetadataHelper;
+	private final ReferenceSetMemberService referenceSetMemberService;
+	private final VersionControlHelper versionControlHelper;
+	private final ElasticsearchOperations elasticsearchOperations;
+	private final CodeSystemVersionService codeSystemVersionService;
+	private final CodeSystemService codeSystemService;
 
-	@Autowired
-	private BranchService branchService;
-
-	@Autowired
-	private BranchMetadataHelper branchMetadataHelper;
-
-	@Autowired
-	private ReferenceSetMemberService referenceSetMemberService;
-
-	@Autowired
-	private VersionControlHelper versionControlHelper;
-
-	@Autowired
-	private ElasticsearchOperations elasticsearchOperations;
-
-	@Autowired
-	private CodeSystemVersionService codeSystemVersionService;
+	public ExtensionAdditionalLanguageRefsetUpgradeService(BranchService branchService, BranchMetadataHelper branchMetadataHelper, ReferenceSetMemberService referenceSetMemberService, VersionControlHelper versionControlHelper, ElasticsearchOperations elasticsearchOperations, CodeSystemVersionService codeSystemVersionService, CodeSystemService codeSystemService) {
+		this.branchService = branchService;
+		this.branchMetadataHelper = branchMetadataHelper;
+		this.referenceSetMemberService = referenceSetMemberService;
+		this.versionControlHelper = versionControlHelper;
+		this.elasticsearchOperations = elasticsearchOperations;
+		this.codeSystemVersionService = codeSystemVersionService;
+		this.codeSystemService = codeSystemService;
+	}
 
 	private final Logger logger = LoggerFactory.getLogger(ExtensionAdditionalLanguageRefsetUpgradeService.class);
+
+	private final Comparator<ReferenceSetMember> comparatorByEffectiveTimeInDescendingOrderOrNull = (m1, m2) -> {
+		if (m1.getEffectiveTimeI() == null && m2.getEffectiveTimeI() == null) {
+			return 0;
+		} else if (m1.getEffectiveTimeI() == null) {
+			return -1; // Null values come first
+		} else if (m2.getEffectiveTimeI() == null) {
+			return 1; // Null values come first
+		}
+		return m2.getEffectiveTimeI().compareTo(m1.getEffectiveTimeI());
+	};
 
 	@PreAuthorize("hasPermission('ADMIN', #codeSystem.branchPath) || hasPermission('RELEASE_LEAD', #codeSystem.branchPath)")
 	public void generateAdditionalLanguageRefsetDelta(CodeSystem codeSystem, String branchPath, String languageRefsetId, Boolean completeCopy) {
@@ -100,7 +102,7 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 			if (lastDependantEffectiveTime == null) {
 				logger.info("No dependent version found in the latest version {} for CodeSystem {}", config.getCodeSystem().getLatestVersion(), config.getCodeSystem().getShortName());
 			}
-			Map<Long, List<ReferenceSetMember>> languageRefsetMembersToCopy = getReferencedComponents(branchPath, config.getLanguageRefsetIdToCopyFrom(), lastDependantEffectiveTime, currentDependantEffectiveTime);
+			Map<Long, List<ReferenceSetMember>> languageRefsetMembersToCopy = getReferencedComponents(config.getParentCodeSystemBranchPath(), config.getLanguageRefsetIdToCopyFrom(), lastDependantEffectiveTime, currentDependantEffectiveTime);
 			logger.info("{} components found with language refset id {} and effective time between {} and {}.", languageRefsetMembersToCopy.keySet().size(),
 					config.getLanguageRefsetIdToCopyFrom(), lastDependantEffectiveTime, currentDependantEffectiveTime);
 			toSave = addOrUpdateLanguageRefsetComponents(branchPath, config, languageRefsetMembersToCopy);
@@ -116,6 +118,16 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 		}
 	}
 
+	private String getParentCodeSystemBranchPath(CodeSystem codeSystem) {
+		String branchPath = codeSystem.getBranchPath();
+		final Optional<CodeSystem> parentCodeSystem = codeSystemService.findByBranchPath(PathUtil.getParentPath(branchPath));
+		if (parentCodeSystem.isEmpty()) {
+			throw new NotFoundException("Cannot find parent CodeSystem for " + branchPath);
+		}
+
+		return parentCodeSystem.get().getBranchPath();
+	}
+
 	private List<ReferenceSetMember> copyAll(String branchPath, AdditionalRefsetExecutionConfig config) {
 		BranchCriteria branchCriteria = versionControlHelper.getBranchCriteria(branchPath);
 		List<ReferenceSetMember> result = new ArrayList<>();
@@ -124,7 +136,7 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 						.must(branchCriteria.getEntityBranchCriteria(ReferenceSetMember.class))
 						.must(termQuery(REFSET_ID, config.getLanguageRefsetIdToCopyFrom()))))
 				.withFilter(termQuery(ACTIVE, true))
-				.withSourceFilter(new FetchSourceFilter(new String[]{REFERENCED_COMPONENT_ID, ACTIVE, ACCEPTABILITY_ID_FIELD_PATH}, null))
+				.withSourceFilter(new FetchSourceFilter(true, new String[]{REFERENCED_COMPONENT_ID, ACTIVE, ACCEPTABILITY_ID_FIELD_PATH}, null))
 				.withPageable(LARGE_PAGE);
 
 		try (final SearchHitsIterator<ReferenceSetMember> referencedComponents = elasticsearchOperations.searchForStream(searchQueryBuilder.build(), ReferenceSetMember.class)) {
@@ -141,11 +153,11 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 				.withQuery(bool(b -> b
 						.must(branchCriteria.getEntityBranchCriteria(ReferenceSetMember.class))
 						.must(termQuery(REFSET_ID, languageRefsetId))))
-				.withSourceFilter(new FetchSourceFilter(new String[]{ MEMBER_ID, REFERENCED_COMPONENT_ID, ACTIVE, ACCEPTABILITY_ID_FIELD_PATH, CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(true, new String[]{ MEMBER_ID, REFERENCED_COMPONENT_ID, ACTIVE, ACCEPTABILITY_ID_FIELD_PATH, CONCEPT_ID}, null))
 				.withPageable(LARGE_PAGE);
 		if (lastDependantEffectiveTime != null) {
 			// for roll up upgrade every 6 months for example
-			searchQueryBuilder.withFilter(range().field(EFFECTIVE_TIME).gt(JsonData.of(lastDependantEffectiveTime)).lte(JsonData.of(currentDependantEffectiveTime)).build()._toQuery());
+			searchQueryBuilder.withFilter(RangeQuery.of(r -> r.number(nrq -> nrq.field(EFFECTIVE_TIME).gt((double)lastDependantEffectiveTime).lte((double)currentDependantEffectiveTime)))._toQuery());
 		} else {
 			// for incremental monthly upgrade
 			searchQueryBuilder.withFilter(termQuery(EFFECTIVE_TIME, currentDependantEffectiveTime));
@@ -195,10 +207,10 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 	private void addNewLanguageRefsetMembers(AdditionalRefsetExecutionConfig config, Map<Long, List<ReferenceSetMember>> languageRefsetMembersToCopy, Map<Long, List<ReferenceSetMember>> existingLanguageRefsetMembersToUpdate, Set<String> memberIdsToSkipCopy, Set<String> updated, Map<Long, Set<Description>> conceptToDescriptionsMap, List<ReferenceSetMember> result) {
 		for (Long conceptId : languageRefsetMembersToCopy.keySet()) {
 			List<ReferenceSetMember> toCopyLanguageRefsetMembers = languageRefsetMembersToCopy.get(conceptId);
-			Map<String, ReferenceSetMember> languageRefsetMembersToCopyMap = convertMembersListToMap(toCopyLanguageRefsetMembers);
+			Map<String, ReferenceSetMember> languageRefsetMembersToCopyMap = convertMembersListToMapByReferencedComponentIdAndOrderByEffectiveTime(toCopyLanguageRefsetMembers);
 
 			List<ReferenceSetMember> existingRefsetMembers = existingLanguageRefsetMembersToUpdate.get(conceptId);
-			Map<String, ReferenceSetMember> existingLanguageRefsetMembersMap = convertMembersListToMap(existingRefsetMembers);
+			Map<String, ReferenceSetMember> existingLanguageRefsetMembersMap = convertMembersListToMapByReferencedComponentIdAndOrderByEffectiveTime(existingRefsetMembers);
 
 			for (ReferenceSetMember toCopyMember : toCopyLanguageRefsetMembers) {
 				if (!memberIdsToSkipCopy.contains(toCopyMember.getMemberId()) && !updated.contains(toCopyMember.getReferencedComponentId())
@@ -216,12 +228,12 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 		for (Long conceptId : existingLanguageRefsetMembersToUpdate.keySet()) {
 			List<ReferenceSetMember> existingRefsetMembers = existingLanguageRefsetMembersToUpdate.get(conceptId);
 			if (languageRefsetMembersToCopy.containsKey(conceptId)) {
-				Map<String, ReferenceSetMember> languageRefsetMembersToCopyMap = convertMembersListToMap(languageRefsetMembersToCopy.get(conceptId));
-				Map<String, ReferenceSetMember> existingLanguageRefsetMembersMap = convertMembersListToMap(existingRefsetMembers);
-				for (ReferenceSetMember existingRefsetMember : existingRefsetMembers) {
-					if (languageRefsetMembersToCopyMap.containsKey(existingRefsetMember.getReferencedComponentId())
-						&& isAbleToAddOrUpdate(existingRefsetMember.getReferencedComponentId(), config.getDefaultModuleId(), languageRefsetMembersToCopyMap, existingLanguageRefsetMembersMap, conceptToDescriptionsMap)) {
-						update(existingRefsetMember, languageRefsetMembersToCopyMap, result, memberIdsToSkipCopy);
+				Map<String, ReferenceSetMember> languageRefsetMembersToCopyMap = convertMembersListToMapByReferencedComponentIdAndOrderByEffectiveTime(languageRefsetMembersToCopy.get(conceptId));
+				Map<String, ReferenceSetMember> existingLanguageRefsetMembersMap = convertMembersListToMapByReferencedComponentIdAndOrderByEffectiveTime(existingRefsetMembers);
+				for (ReferenceSetMember existing : existingLanguageRefsetMembersMap.values()) {
+					if (languageRefsetMembersToCopyMap.containsKey(existing.getReferencedComponentId())
+							&& isAbleToAddOrUpdate(existing.getReferencedComponentId(), config.getDefaultModuleId(), languageRefsetMembersToCopyMap, existingLanguageRefsetMembersMap, conceptToDescriptionsMap)) {
+						update(existing, languageRefsetMembersToCopyMap, result, memberIdsToSkipCopy);
 					}
 				}
 			}
@@ -291,15 +303,23 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 						if (existing != null && existing.isActive() && Concepts.PREFERRED.equals(existing.getAdditionalField(ACCEPTABILITY_ID))) {
 							return true;
 						}
-
 				}
 			}
 		}
 		return false;
 	}
 
-	private Map<String, ReferenceSetMember> convertMembersListToMap(List<ReferenceSetMember> members) {
-		return members == null ? new HashMap<>() : members.stream().collect(Collectors.toMap(ReferenceSetMember::getReferencedComponentId, Function.identity()));
+	private Map<String, ReferenceSetMember> convertMembersListToMapByReferencedComponentIdAndOrderByEffectiveTime(List<ReferenceSetMember> members) {
+		if (members == null) {
+			return new HashMap<>();
+		}
+		Set<String> refsetIds = members.stream().map(ReferenceSetMember::getRefsetId).collect(Collectors.toSet());
+		if (refsetIds.size() != 1) {
+			logger.warn("Members should have the same refset id but found multiple refset ids: {}", refsetIds);
+			throw new IllegalArgumentException("Members should have the same refset id.");
+		}
+		return members.stream().sorted(comparatorByEffectiveTimeInDescendingOrderOrNull)
+				.collect(Collectors.toMap(ReferenceSetMember::getReferencedComponentId, Function.identity(), (latest, existing) -> latest));
 	}
 
 	private ReferenceSetMember copy(ReferenceSetMember enGbMember, AdditionalRefsetExecutionConfig config) {
@@ -350,6 +370,7 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 		}
 		config.setDefaultEnglishLanguageRefsetId(defaultEnglishLanguageRefsetId);
 		config.setDefaultModuleId(defaultModuleId);
+		config.setParentCodeSystemBranchPath(getParentCodeSystemBranchPath(codeSystem));
 		return config;
 	}
 
@@ -359,6 +380,7 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 		private String defaultEnglishLanguageRefsetId;
 		private final boolean completeCopy;
 		private String languageRefsetIdToCopyFrom;
+		private String parentCodeSystemBranchPath;
 
 		AdditionalRefsetExecutionConfig(CodeSystem codeSystem, Boolean completeCopy) {
 			this.codeSystem = codeSystem;
@@ -393,6 +415,14 @@ public class ExtensionAdditionalLanguageRefsetUpgradeService {
 
 		 String getLanguageRefsetIdToCopyFrom() {
 			return this.languageRefsetIdToCopyFrom;
+		 }
+
+		 String getParentCodeSystemBranchPath() {
+			 return parentCodeSystemBranchPath;
+		 }
+
+		 void setParentCodeSystemBranchPath(String parentCodeSystemBranchPath) {
+			 this.parentCodeSystemBranchPath = parentCodeSystemBranchPath;
 		 }
 	 }
 

@@ -1,6 +1,6 @@
 package org.snomed.snowstorm.core.data.services.pojo;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.snomed.snowstorm.core.data.domain.Concept;
 import org.snomed.snowstorm.core.data.domain.Description;
 import org.snomed.snowstorm.core.data.domain.ReferenceSetMember;
@@ -9,12 +9,12 @@ import org.snomed.snowstorm.core.data.domain.Relationship;
 import java.util.Collections;
 import java.util.stream.StreamSupport;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-public class PersistedComponentsTest {
+class PersistedComponentsTest {
 
 	@Test
-	public void testBuilderWithNoSettingReturnsEmptyListForEachPersistedComponent() {
+	void testBuilderWithNoSettingReturnsEmptyListForEachPersistedComponent() {
 		final PersistedComponents persistedComponents = PersistedComponents.builder().build();
 		assertEquals(0L, StreamSupport.stream(persistedComponents.getPersistedConcepts().spliterator(), false).count());
 		assertEquals(0L, StreamSupport.stream(persistedComponents.getPersistedDescriptions().spliterator(), false).count());
@@ -23,25 +23,25 @@ public class PersistedComponentsTest {
 	}
 
 	@Test
-	public void testBuilderWithPersistedConcepts() {
+	void testBuilderWithPersistedConcepts() {
 		final Concept concept = new Concept("3311481223");
 		assertEquals(concept, PersistedComponents.builder().withPersistedConcepts(Collections.singleton(concept)).build().getPersistedConcepts().iterator().next());
 	}
 
 	@Test
-	public void testBuilderWithPersistedDescriptions() {
+	void testBuilderWithPersistedDescriptions() {
 		final Description description = new Description("This is a test");
 		assertEquals(description, PersistedComponents.builder().withPersistedDescriptions(Collections.singleton(description)).build().getPersistedDescriptions().iterator().next());
 	}
 
 	@Test
-	public void testBuilderWithPersistedRelationships() {
+	void testBuilderWithPersistedRelationships() {
 		final Relationship relationship = new Relationship("21103855022");
 		assertEquals(relationship, PersistedComponents.builder().withPersistedRelationships(Collections.singleton(relationship)).build().getPersistedRelationships().iterator().next());
 	}
 
 	@Test
-	public void testBuilderWithPersistedReferenceSetMembers() {
+	void testBuilderWithPersistedReferenceSetMembers() {
 		final ReferenceSetMember referenceSetMember = new ReferenceSetMember("9000002343000012004", "733073667", "3311111663");
 		assertEquals(referenceSetMember, PersistedComponents.builder().withPersistedReferenceSetMembers(
 				Collections.singleton(referenceSetMember)).build().getPersistedReferenceSetMembers().iterator().next());

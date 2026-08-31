@@ -3,6 +3,7 @@ package org.snomed.snowstorm.rest.pojo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import org.snomed.snowstorm.core.data.domain.CodeSystem;
 import org.snomed.snowstorm.core.data.services.pojo.CodeSystemDefaultConfiguration;
+import org.snomed.snowstorm.core.data.services.pojo.CodeSystemConfiguration;
 
 public class CodeSystemUpdateRequest {
 
@@ -10,6 +11,7 @@ public class CodeSystemUpdateRequest {
 	public String uriModuleId;
 	public String owner;
 	public String countryCode;
+	public String countryName;
 	public String maintainerType;
 	public String defaultLanguageCode;
 	public String[] defaultLanguageReferenceSets;
@@ -53,6 +55,13 @@ public class CodeSystemUpdateRequest {
 		return this;
 	}
 
+	public CodeSystemUpdateRequest populate(CodeSystemConfiguration configuration) {
+		if (configuration.name() != null) name = configuration.name();
+		if (configuration.countryCode() != null) countryCode = configuration.countryCode();
+		if (configuration.owner() != null) owner = configuration.owner();
+		return this;
+	}
+
 	public String getName() {
 		return name;
 	}
@@ -67,6 +76,10 @@ public class CodeSystemUpdateRequest {
 
 	public String getCountryCode() {
 		return countryCode;
+	}
+
+	public String getCountryName() {
+		return countryName;
 	}
 
 	public String getMaintainerType() {

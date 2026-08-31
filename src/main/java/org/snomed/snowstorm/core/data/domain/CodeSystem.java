@@ -50,6 +50,9 @@ public class CodeSystem implements CodeSystemCreate {
 	private String countryCode;
 
 	@Field(type = FieldType.Keyword)
+	private String countryName;
+
+	@Field(type = FieldType.Keyword)
 	private String maintainerType;
 
 	@Field(type = FieldType.Keyword)
@@ -71,6 +74,9 @@ public class CodeSystem implements CodeSystemCreate {
 
 	@Field(type = FieldType.Short)
 	private short maximumPostcoordinationLevel;
+
+	@Transient
+	private String defaultModuleId;
 
 	@Transient
 	private Integer dependantVersionEffectiveTime;
@@ -164,6 +170,14 @@ public class CodeSystem implements CodeSystemCreate {
 		this.countryCode = countryCode;
 	}
 
+	public String getCountryName() {
+		return countryName;
+	}
+
+	public void setCountryName(String countryName) {
+		this.countryName = countryName;
+	}
+
 	public String getMaintainerType() {
 		return maintainerType;
 	}
@@ -231,6 +245,15 @@ public class CodeSystem implements CodeSystemCreate {
 	@JsonIgnore
 	public int getMaximumPostcoordinationLevelNullSafe() {
 		return maximumPostcoordinationLevel;
+	}
+
+	@JsonIgnore
+	public String getDefaultModuleId() {
+		return defaultModuleId;
+	}
+
+	public void setDefaultModuleId(String defaultModuleId) {
+		this.defaultModuleId = defaultModuleId;
 	}
 
 	public Boolean isPostcoordinated() {

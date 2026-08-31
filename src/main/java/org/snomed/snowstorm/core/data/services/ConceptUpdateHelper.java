@@ -6,6 +6,7 @@ import com.google.common.collect.Sets;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.ComponentService;
 import io.kaicode.elasticvc.api.VersionControlHelper;
+import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.elasticvc.domain.Commit;
 import io.kaicode.elasticvc.domain.DomainEntity;
 import io.kaicode.elasticvc.domain.Metadata;
@@ -41,7 +42,6 @@ import java.util.stream.Collectors;
 import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
 import static io.kaicode.elasticvc.helper.QueryHelper.termsQuery;
 import static org.snomed.snowstorm.core.data.domain.Concepts.CONCEPT_NON_CURRENT;
-import static org.snomed.snowstorm.core.data.domain.Concepts.inactivationIndicatorNames;
 
 @Service
 public class ConceptUpdateHelper extends ComponentService {
@@ -132,7 +132,8 @@ public class ConceptUpdateHelper extends ComponentService {
 		validateConcepts(newVersionConcepts);
 
 		// Grab branch metadata including values inherited from ancestor branches
-		Metadata metadata = branchService.findBranchOrThrow(commit.getBranch().getPath(), true).getMetadata();
+		Branch branch = branchService.findBranchOrThrow(commit.getBranch().getPath(), true);
+		Metadata metadata = branch.getMetadata();
 		String defaultModuleId = metadata.getString(Config.DEFAULT_MODULE_ID_KEY);
 		List<String> expectedExtensionModules = metadata.getList(Config.EXPECTED_EXTENSION_MODULES);
 		String defaultNamespace = metadata.getString(Config.DEFAULT_NAMESPACE_KEY);
@@ -182,13 +183,13 @@ public class ConceptUpdateHelper extends ComponentService {
 					newVersionConcept.getAllOwlAxiomMembers().forEach(axiom -> axiom.setActive(false));
 					newVersionConcept.getDescriptions().forEach(description -> {
 						if (StringUtils.isEmpty(description.getInactivationIndicator())) {
-							description.setInactivationIndicator(inactivationIndicatorNames.get(Concepts.CONCEPT_NON_CURRENT));
+							description.setInactivationIndicator(InactivationIndicatorUtil.getInactivationIndicator(branch, Concepts.CONCEPT_NON_CURRENT));
 						}
 					});
 				}
 
 				// Create or update concept inactivation indicator refset members based on the json inactivation map
-				updateInactivationIndicator(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, Concepts.CONCEPT_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId);
+				updateInactivationIndicator(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, Concepts.CONCEPT_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId, branch);
 
 				// Create or update concept historical association refset members based on the json inactivation map
 				updateAssociations(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, defaultModuleId);
@@ -209,6 +210,7 @@ public class ConceptUpdateHelper extends ComponentService {
 
 			for (Description description : newVersionConcept.getDescriptions()) {
 				description.setConceptId(newVersionConcept.getConceptId());
+				description.setLanguageCode(description.getLanguageCode().toLowerCase());
 				if (description.getDescriptionId() == null) {
 					description.setDescriptionId(reservedIds.getNextId(ComponentType.Description).toString());
 				}
@@ -223,7 +225,7 @@ public class ConceptUpdateHelper extends ComponentService {
 
 				// Description inactivation indicator changes
 				updateInactivationIndicator(description, existingDescription, existingDescriptionFromParent, refsetMembersToPersist,
-						Concepts.DESCRIPTION_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId);
+						Concepts.DESCRIPTION_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId, branch);
 
 				// Description association changes
 				updateAssociations(description, existingDescription, existingDescriptionFromParent, refsetMembersToPersist, defaultModuleId);
@@ -410,7 +412,8 @@ public class ConceptUpdateHelper extends ComponentService {
 			SnomedComponentWithInactivationIndicator existingConceptFromParent,
 			Collection<ReferenceSetMember> refsetMembersToPersist,
 			String indicatorReferenceSet,
-			String defaultModuleId) {
+			String defaultModuleId,
+		 	Branch branch) {
 
 		if (newComponent instanceof Description newDescription) {
 			if (newDescription.isActive()) {
@@ -423,8 +426,8 @@ public class ConceptUpdateHelper extends ComponentService {
 		}
 
 		String newIndicatorName = newComponent.getInactivationIndicator();
-		final String newIndicatorId = newIndicatorName != null ? inactivationIndicatorNames.inverse().get(newIndicatorName) : null;
-		if (newIndicatorName != null && newIndicatorId == null) {
+		final String newIndicatorId = newIndicatorName != null ? InactivationIndicatorUtil.getInactivationIndicatorInverse(branch, newIndicatorName) : null;
+		if (isInactivationIndicatorNotRecognised(newIndicatorName, branch)) {
 			throw new IllegalArgumentException(newComponent.getClass().getSimpleName() + " inactivation indicator not recognised '" + newIndicatorName + "'.");
 		}
 		Map<String, Set<String>> membersRequired = new HashMap<>();
@@ -633,8 +636,13 @@ public class ConceptUpdateHelper extends ComponentService {
 	 */
 	public void doSaveBatchDescriptions(Collection<Description> descriptions, Commit commit) {
 		Map<String, Set<Character>> charactersNotFoldedSets = searchLanguagesConfiguration.getCharactersNotFoldedSets();
+		Set<String> elisionLanguages = searchLanguagesConfiguration.getElisionLanguages();
 		for (Description description : descriptions) {
-			description.setTermFolded(DescriptionHelper.foldTerm(description.getTerm(),
+			String term = description.getTerm();
+			if (elisionLanguages.contains(description.getLanguageCode())) {
+				term = DescriptionHelper.stripElisions(term);
+			}
+			description.setTermFolded(DescriptionHelper.foldTerm(term,
 					charactersNotFoldedSets.getOrDefault(description.getLanguageCode(), Collections.emptySet())));
 		}
 		doSaveBatchComponents(descriptions, commit, "descriptionId", descriptionRepository);
@@ -804,4 +812,13 @@ public class ConceptUpdateHelper extends ComponentService {
 		return versionControlHelper;
 	}
 
+	private boolean isInactivationIndicatorNotRecognised(String newIndicatorName, Branch branch) {
+		boolean requestedCNC = Objects.equals(newIndicatorName, "CONCEPT_NON_CURRENT") || Objects.equals(newIndicatorName, CONCEPT_NON_CURRENT);
+		if (requestedCNC) {
+			return false;
+		}
+
+		final String newIndicatorId = newIndicatorName != null ? InactivationIndicatorUtil.getInactivationIndicatorInverse(branch, newIndicatorName) : null;
+		return newIndicatorName != null && newIndicatorId == null;
+	}
 }

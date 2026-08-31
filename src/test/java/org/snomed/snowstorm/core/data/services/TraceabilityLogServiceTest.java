@@ -16,6 +16,7 @@ import org.snomed.snowstorm.core.data.services.traceability.TraceabilityLogServi
 import org.snomed.snowstorm.core.rf2.RF2Type;
 import org.snomed.snowstorm.core.rf2.rf2import.ImportService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.snomed.snowstorm.core.data.domain.Concepts.*;
 import static org.snomed.snowstorm.core.data.services.traceability.Activity.ActivityType.*;
 
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 class TraceabilityLogServiceTest extends AbstractTest {
 
 	@Autowired

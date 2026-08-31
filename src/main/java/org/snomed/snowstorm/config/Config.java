@@ -4,11 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Lists;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.VersionControlHelper;
+import io.kaicode.elasticvc.domain.Commit;
+import jakarta.annotation.PostConstruct;
 import org.elasticsearch.client.Request;
+import org.ihtsdo.otf.resourcemanager.ResourceManager;
 import org.modelmapper.ModelMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.langauges.ecl.ECLQueryBuilder;
+import org.snomed.module.storage.ModuleStorageCoordinator;
 import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.domain.SnomedComponent;
 import org.snomed.snowstorm.core.data.services.*;
@@ -23,6 +27,7 @@ import org.snomed.snowstorm.ecl.validation.ECLPreprocessingService;
 import org.snomed.snowstorm.fhir.config.FHIRConceptMapImplicitConfig;
 import org.snomed.snowstorm.mrcm.MRCMLoader;
 import org.snomed.snowstorm.mrcm.MRCMUpdateService;
+import org.snomed.snowstorm.core.data.services.AdditionalDependencyUpdateService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.autoconfigure.jdbc.DataSourceHealthContributorAutoConfiguration;
@@ -36,17 +41,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.PropertySource;
-import org.springframework.context.annotation.PropertySources;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.repository.config.EnableElasticsearchRepositories;
+import org.springframework.jms.core.JmsTemplate;
 import org.springframework.jms.support.converter.MappingJackson2MessageConverter;
 import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.jms.support.converter.MessageType;
 import org.springframework.scheduling.annotation.EnableAsync;
 
-import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -71,9 +76,7 @@ import static java.lang.Long.parseLong;
 				"org.snomed.snowstorm.fhir.repositories"
 		})
 @EnableConfigurationProperties
-@PropertySources({
-		@PropertySource(value = "classpath:application.properties", encoding = "UTF-8")
-})
+@PropertySource(value = "classpath:application.properties", encoding = "UTF-8")
 @EnableAsync
 public abstract class Config extends ElasticsearchConfig {
 
@@ -96,18 +99,27 @@ public abstract class Config extends ElasticsearchConfig {
 	public static final String DEFAULT_MODULE_ID_KEY = "defaultModuleId";
 	public static final String DEFAULT_NAMESPACE_KEY = "defaultNamespace";
 	public static final String EXPECTED_EXTENSION_MODULES = "expectedExtensionModules";
+	public static final String DEPENDENCY_PACKAGE = "dependencyPackage";
+	public static final String REQUIRED_LANGUAGE_REFSETS = "requiredLanguageRefsets";
+	public static final String CNC_ENABLED = "cncEnabled";
 
 	@Value("${elasticsearch.index.max.terms.count}")
 	private int indexMaxTermsCount;
-
-	@Value("${elasticsearch.index.max.fields.limit}")
-	private int indexMaxFieldsLimit;
 
 	@Value("${search.term.minimumLength}")
 	private int searchTermMinimumLength;
 
 	@Value("${search.term.maximumLength}")
 	private int searchTermMaximumLength;
+
+	@Value("${snowstorm.branch-change.message.enabled}" )
+	private boolean jmsMessageEnabled;
+
+	@Value("${jms.queue.prefix}")
+	private String jmsQueuePrefix;
+
+	@Autowired
+	private JmsTemplate jmsTemplate;
 
 	@Autowired
 	private DomainEntityConfiguration domainEntityConfiguration;
@@ -151,10 +163,21 @@ public abstract class Config extends ElasticsearchConfig {
 	@Autowired
 	private RefsetDescriptorUpdaterService refsetDescriptorUpdaterService;
 
+	@Autowired
+	private ReferencedConceptsLookupUpdateService refsetConceptsLookupUpdateService;
+
+	@Autowired
+	private AdditionalDependencyUpdateService additionalDependencyUpdateService;
+
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
 	@PostConstruct
-	public void configureCommitListeners() {
+	public void configureListeners(){
+		this.configureCommitListeners();
+		this.configureBranchSaveListeners();
+	}
+
+	private void configureCommitListeners() {
 		// Commit listeners will be called in this order
 		branchService.addCommitListener(mrcmLoader);
 		branchService.addCommitListener(conceptDefinitionStatusUpdateService);
@@ -163,16 +186,39 @@ public abstract class Config extends ElasticsearchConfig {
 		branchService.addCommitListener(branchClassificationStatusService);
 		branchService.addCommitListener(refsetDescriptorUpdaterService);
 		branchService.addCommitListener(integrityService);
+		branchService.addCommitListener(refsetConceptsLookupUpdateService);
 		branchService.addCommitListener(multiSearchService);
 		branchService.addCommitListener(eclPreprocessingService);
 		branchService.addCommitListener(commitServiceHookClient);
+		branchService.addCommitListener(additionalDependencyUpdateService);
 		branchService.addCommitListener(traceabilityLogService);
 		branchService.addCommitListener(BranchMetadataHelper::clearTransientMetadata);
+		branchService.addCommitListener(commit -> {
+			if (jmsMessageEnabled)  {
+				Map<String, String> jmsObject = new HashMap<>();
+				jmsObject.put("branch", commit.getBranch().getPath());
+				if (Commit.CommitType.PROMOTION == commit.getCommitType()
+					|| Commit.CommitType.REBASE == commit.getCommitType()) {
+					jmsObject.put("sourceBranch", commit.getSourceBranchPath());
+				}
+				jmsTemplate.convertAndSend(jmsQueuePrefix + ".branch.change", jmsObject);
+			}
+		});
 		branchService.addCommitListener(commit ->
 			logger.info("Completed commit on {} in {} seconds.", commit.getBranch().getPath(), secondsDuration(commit.getTimepoint())));
 
 		// Push configured term constraints into static field
 		DescriptionCriteria.configure(searchTermMinimumLength, searchTermMaximumLength);
+	}
+
+	private void configureBranchSaveListeners() {
+		branchService.addBranchSaveListener(branch -> {
+			if (jmsMessageEnabled)  {
+				Map<String, String> jmsObject = new HashMap<>();
+				jmsObject.put("branch", branch.getPath());
+				jmsTemplate.convertAndSend(jmsQueuePrefix + ".branch.change", jmsObject);
+			}
+		});
 	}
 	
 	private String secondsDuration(Date timepoint) {
@@ -232,7 +278,13 @@ public abstract class Config extends ElasticsearchConfig {
 
 	@Bean
 	@ConfigurationProperties(prefix = "codesystem")
-	public CodeSystemDefaultConfigurationService getCodeSystemConfigurationService() {
+	public CodeSystemConfigurationService getCodeSystemConfigurationService() {
+		return new CodeSystemConfigurationService();
+	}
+
+	@Bean
+	@ConfigurationProperties(prefix = "codesystem")
+	public CodeSystemDefaultConfigurationService getCodeSystemDefaultConfigurationService() {
 		return new CodeSystemDefaultConfigurationService();
 	}
 	
@@ -268,7 +320,7 @@ public abstract class Config extends ElasticsearchConfig {
 
 	@Bean
 	public ECLQueryBuilder eclQueryBuilder() {
-		return new ECLQueryBuilder(new SECLObjectFactory());
+		return new ECLQueryBuilder(new SECLObjectFactory(indexMaxTermsCount));
 	}
 
 	@Bean // Serialize message content to json using TextMessage
@@ -281,6 +333,16 @@ public abstract class Config extends ElasticsearchConfig {
 	@Bean
 	public ModelMapper modelMapper() {
 		return new ModelMapper();
+	}
+
+	@Bean
+	public ModuleStorageCoordinator moduleStorageCoordinator(@Autowired ModuleStorageResourceConfig moduleStorageResourceConfig, @Autowired ResourceLoader cloudResourceLoader, @Value("${module.storage.environment.shortname}") final String envShortname) {
+		ResourceManager resourceManager = new ResourceManager(moduleStorageResourceConfig, cloudResourceLoader);
+		return switch (envShortname) {
+			case "prod" -> ModuleStorageCoordinator.initProd(resourceManager);
+			case "uat" -> ModuleStorageCoordinator.initUat(resourceManager);
+			default -> ModuleStorageCoordinator.initDev(resourceManager);
+		};
 	}
 
 	protected void updateIndexMaxTermsSettingForAllSnomedComponents() {
@@ -307,14 +369,5 @@ public abstract class Config extends ElasticsearchConfig {
 		}
 	}
 
-	protected void updateIndexMappingFieldsLimitSetting() {
-		try {
-			Request updateSettingsRequest = new Request("PUT", "/fhir-concept/_settings");
-			updateSettingsRequest.setJsonEntity("{\"" + INDEX_MAX_FIELDS_LIMIT + "\": " + indexMaxFieldsLimit + "}");
-			elasticsearchRestClient(clientConfiguration()).performRequest(updateSettingsRequest);
-			logger.info("{} is updated to {}", INDEX_MAX_FIELDS_LIMIT, indexMaxFieldsLimit);
-		} catch (IOException e) {
-			logger.error("Failed to update setting {}", INDEX_MAX_TERMS_COUNT, e);
-		}
-	}
+
 }

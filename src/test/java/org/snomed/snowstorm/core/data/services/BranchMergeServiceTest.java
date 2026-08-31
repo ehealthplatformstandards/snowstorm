@@ -37,6 +37,7 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 import java.util.*;
@@ -3647,7 +3648,7 @@ class BranchMergeServiceTest extends AbstractTest {
 	}
 
 	@Test
-	public void testRHSVersionBehindWhenExtensionPublishesOnSameDate() throws ServiceException, InterruptedException {
+	void testRHSVersionBehindWhenExtensionPublishesOnSameDate() throws ServiceException, InterruptedException {
 		String intMain = "MAIN";
 		String extMain = "MAIN/SNOMEDCT-TEST";
 		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
@@ -3745,7 +3746,7 @@ class BranchMergeServiceTest extends AbstractTest {
 	}
 
 	@Test
-	public void testInternationalVersioningDoesNotCauseExtensionToBeFlaggedAsBehind() throws ServiceException, InterruptedException {
+	void testInternationalVersioningDoesNotCauseExtensionToBeFlaggedAsBehind() throws ServiceException, InterruptedException {
 		String intMain = "MAIN";
 		String extMain = "MAIN/SNOMEDCT-TEST";
 		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
@@ -5792,7 +5793,7 @@ class BranchMergeServiceTest extends AbstractTest {
 	}
 
 	@Test
-	public void testExtensionComponentDoesNotRevertBackToDefaultModuleId() throws ServiceException, InterruptedException {
+	void testExtensionComponentDoesNotRevertBackToDefaultModuleId() throws ServiceException, InterruptedException {
 		String intMain = "MAIN";
 		String extMain = "MAIN/SNOMEDCT-XX";
 		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
@@ -5873,6 +5874,53 @@ class BranchMergeServiceTest extends AbstractTest {
 
 		// Assert
 		assertEquals(moduleBefore, moduleAfter);
+	}
+
+	@Test
+	void testRebasingVersionedAnnotationOntoUnversioned() throws ServiceException, InterruptedException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		Map<String, String> intAcceptable = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(ACCEPTABLE));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		Description description;
+		CodeSystem codeSystem;
+
+		// Create new Concept
+		concept = new Concept()
+				// Note typo in FSN
+				.addDescription(new Description("Medcine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Annotate new Concept
+		ReferenceSetMember referenceSetMember = new ReferenceSetMember();
+		referenceSetMember.setModuleId(CORE_MODULE);
+		referenceSetMember.setConceptId(medicineId);
+		referenceSetMember.setRefsetId("1292992004");
+		referenceSetMember.setReferencedComponentId(medicineId);
+		referenceSetMember.setAdditionalField("languageDialectCode", "en");
+		String annotationId = memberService.createMember(intMain, referenceSetMember).getMemberId();
+
+		// Create new project before versioning
+		String projectA = "MAIN/projectA";
+		branchService.create(projectA);
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20240101, "20240101");
+
+		// On new project, correct FSN
+		concept = conceptService.find(medicineId, projectA);
+		getDescription(concept, "Medcine (medicine)").setTerm("Medicine (medicine)");
+		concept = conceptService.update(concept, projectA);
+
+		// Rebase project after versioning
+		MergeReview mergeReview = getMergeReviewInCurrentState(intMain, projectA);
+		Collection<MergeReviewConceptVersions> conflicts = reviewService.getMergeReviewConflictingConcepts(mergeReview.getId(), new ArrayList<>());
+		assertFalse(conflicts.isEmpty());
 	}
 
 	private void assertNotVersioned(Description description) {
@@ -6022,6 +6070,111 @@ class BranchMergeServiceTest extends AbstractTest {
 
 		// Conflict setup complete - rebase A2 for conflict
 		return Lists.newArrayList(parentConcept, leftConcept, rightConcept);
+	}
+
+	@Test
+	void testRebaseWithAdditionalCodeSystemDependency_ShouldNotCreateDuplicateComponents() throws ServiceException, InterruptedException {
+		//Create SNOMEDCT-LOINC as an additional code system
+		final String LOINC_MODULE = "11010000107";
+		final String TEST_MODULE = "45450000124";
+		final String LOINC_CONCEPT_ID = "11010000120"; // A concept that exists in LOINC
+
+		// Setup MAIN code system (already created in setup())
+		CodeSystem main = codeSystemService.find(SNOMEDCT);
+		assertNotNull(main);
+		
+		// Create SNOMEDCT-LOINC code system
+		CodeSystem loinc = new CodeSystem("SNOMEDCT-LOINC", "MAIN/SNOMEDCT-LOINC");
+		codeSystemService.createCodeSystem(loinc);
+
+		// Create a concept in LOINC module
+		Concept loincConcept = new Concept(LOINC_CONCEPT_ID, LOINC_MODULE)
+				.addDescription(new Description("LOINC concept")
+						.setTypeId(Concepts.FSN)
+						.setCaseSignificance("CASE_INSENSITIVE")
+						.setAcceptabilityMap(Collections.singletonMap(US_EN_LANG_REFSET,
+								Concepts.descriptionAcceptabilityNames.get(Concepts.ACCEPTABLE))))
+				.addRelationship(new Relationship(Concepts.ISA, Concepts.SNOMEDCT_ROOT));
+		conceptService.create(loincConcept, loinc.getBranchPath());
+
+		// Create MDRS for LOINC
+		ReferenceSetMember loincMDRS = new ReferenceSetMember(LOINC_MODULE, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, CORE_MODULE);
+		loincMDRS.setAdditionalField("targetEffectiveTime", "20190131");
+		memberService.createMember(loinc.getBranchPath(), loincMDRS);
+
+		// Version LOINC
+		codeSystemService.createVersion(loinc, 20240901, "LOINC September 2024");
+		
+		// Create SNOMEDCT-TEST extension with dependency on both MAIN and LOINC
+		CodeSystem testExtension = new CodeSystem("SNOMEDCT-TEST", "MAIN/SNOMEDCT-TEST");
+		codeSystemService.createCodeSystem(testExtension);
+		
+		// Set up TEST module in metadata
+		Metadata testMetadata = new Metadata();
+		testMetadata.putString("defaultModuleId", TEST_MODULE);
+		branchService.updateMetadata(testExtension.getBranchPath(), testMetadata);
+
+		// Create MDRS for TEST extension - additional dependency on LOINC
+		ReferenceSetMember testMDRSLoinc = new ReferenceSetMember(TEST_MODULE, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, LOINC_MODULE);
+		testMDRSLoinc.setAdditionalField("targetEffectiveTime", "20240901");
+		memberService.createMember(testExtension.getBranchPath(), testMDRSLoinc);
+		
+		// Verify that additional dependency metadata is set
+		Branch testBranch = branchService.findLatest(testExtension.getBranchPath());
+		assertTrue(testBranch.getMetadata().containsKey(VersionControlHelper.ADDITIONAL_DEPENDENT_BRANCHES),
+				"Additional dependency metadata should be set");
+		
+		// Create Task A and Task B
+		String project = testExtension.getBranchPath() + "/PROJECT";
+		String taskA = project + "/TASK-A";
+		String taskB = project + "/TASK-B";
+		branchService.create(project);
+		branchService.create(taskA);
+		branchService.create(taskB);
+		
+		// In Task A, add a new PT
+		Concept loincConceptInTaskA = conceptService.find(LOINC_CONCEPT_ID, taskA);
+		loincConceptInTaskA.addDescription(new Description("LOINC concept in test extension task A")
+				.setAcceptabilityMap(Collections.singletonMap(US_EN_LANG_REFSET,
+				Concepts.descriptionAcceptabilityNames.get(PREFERRED))));
+		conceptService.update(loincConceptInTaskA, taskA);
+
+		// In Task B, Add a new PT
+		Concept loincConceptOnTaskB = conceptService.find(LOINC_CONCEPT_ID, taskB);
+		loincConceptOnTaskB.addDescription(new Description("LOINC concept in test extension task B")
+				.setAcceptabilityMap(Collections.singletonMap(US_EN_LANG_REFSET,
+						Concepts.descriptionAcceptabilityNames.get(PREFERRED))));
+		conceptService.update(loincConceptOnTaskB, taskB);
+
+		// Promote Task A to project
+		branchMergeService.mergeBranchSync(taskA, project, null);
+
+		// Rebase Task B - This should cause conflict
+		MergeReview review = getMergeReviewInCurrentState(project, taskB);
+		Collection<MergeReviewConceptVersions> conflicts = reviewService.getMergeReviewConflictingConcepts(review.getId(), new ArrayList<>());
+		assertEquals(1, conflicts.size());
+
+		// Choose the middle column
+		for (MergeReviewConceptVersions conflict : conflicts) {
+			Concept autoMergedConcept = conflict.getAutoMergedConcept();
+			reviewService.persistManuallyMergedConcept(review, Long.parseLong(autoMergedConcept.getConceptId()), autoMergedConcept);
+		}
+
+		reviewService.applyMergeReview(review);
+
+		// Verify that there are no duplicate components
+		loincConceptOnTaskB = conceptService.find(LOINC_CONCEPT_ID, taskB);
+		assertNotNull(loincConceptOnTaskB, "LOINC concept should be visible on Task B");
+		assertEquals(LOINC_CONCEPT_ID, loincConceptOnTaskB.getConceptId());
+
+		// Promote taskB
+		branchMergeService.mergeBranchSync(taskB, project, null);
+
+		// Create a new task
+		Branch taskC = branchService.create(project + "/TASK-C");
+		Concept loincConceptOnTaskC = conceptService.find(LOINC_CONCEPT_ID, taskC.getPath());
+		assertNotNull(loincConceptOnTaskC, "LOINC concept should be visible on Task C");
+		assertEquals(LOINC_CONCEPT_ID, loincConceptOnTaskC.getConceptId());
 	}
 	
 	private Concept assertBranchStateAndConceptVisibility(String path, Branch.BranchState expectedBranchState, String conceptId, boolean expectedVisible) {

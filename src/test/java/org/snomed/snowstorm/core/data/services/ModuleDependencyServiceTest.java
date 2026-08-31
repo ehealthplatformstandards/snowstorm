@@ -1,209 +1,748 @@
 package org.snomed.snowstorm.core.data.services;
 
 import io.kaicode.elasticvc.api.BranchService;
-import io.kaicode.elasticvc.domain.Branch;
-import io.kaicode.elasticvc.domain.Metadata;
-
-import org.junit.jupiter.api.BeforeEach;
+import io.kaicode.elasticvc.api.ComponentService;
 import org.junit.jupiter.api.Test;
 import org.snomed.snowstorm.AbstractTest;
+import org.snomed.snowstorm.config.Config;
 import org.snomed.snowstorm.core.data.domain.*;
 import org.snomed.snowstorm.core.data.services.pojo.MemberSearchRequest;
+import org.snomed.snowstorm.rest.CodeSystemController;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import static org.junit.Assert.*;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-/**
- * Use cases to be coded into test cases:
- * 1. BE where we have the Belgian edition dependent on the common French before the International
- * 2. NO where the majority of concepts are in a sub-module (can't make assumptions about "most concepts")
- * 3. NZ where module 1 and module 2 are mutually dependent on each other.  Module 1 has no content and is defined in Module 2.
- *
- */
+import static org.junit.jupiter.api.Assertions.*;
+import static org.snomed.snowstorm.core.data.domain.Concepts.*;
+
 class ModuleDependencyServiceTest extends AbstractTest {
-	
-	private static String TEST_MODULE = "10123400";
-	private static String TEST_MODULE2 = "20123400";
-	private static String TEST_ET = "20990131";
-	private static String TEST_DEPENDENCY_ET = "19990131";
-	private static String TEST_CS_INT = "SNOMEDCT-INT";
-	private static String TEST_CS_MS = "SNOMEDCT-XY";
-	private static String TEST_CS_PATH = "MAIN/" + TEST_CS_MS;
-
 	@Autowired
-	private CodeSystemService codeSystemService;
-	
-	@Autowired
-	private ConceptService conceptService;
+	private ModuleDependencyService mdService;
 
 	@Autowired
 	private BranchService branchService;
 
 	@Autowired
-	private ModuleDependencyService mdService;
-	
+	private ReferenceSetMemberService referenceSetMemberService;
+
 	@Autowired
-	private ReferenceSetMemberService rmService;
+	private ConceptService conceptService;
 
+	@Autowired
+	private CodeSystemService codeSystemService;
 
-	@BeforeEach
-	void setUp() throws Exception {
-		branchService.deleteAll();
-		conceptService.deleteAll();
-		branchService.create("MAIN");
-		conceptService.create(new Concept(Concepts.SNOMEDCT_ROOT), Branch.MAIN);
-		conceptService.create(new Concept(Concepts.CORE_MODULE).setModuleId(Concepts.CORE_MODULE), Branch.MAIN);
-		conceptService.create(new Concept(Concepts.MODEL_MODULE).setModuleId(Concepts.MODEL_MODULE), Branch.MAIN);
-		
-		CodeSystem codeSystemINT = new CodeSystem(TEST_CS_INT, Branch.MAIN);
-		codeSystemService.createCodeSystem(codeSystemINT);
-		
-		//This is interesting because creating a version is now generating and persisting the MDR members
-		//So even the setup is a good test.
-		codeSystemService.createVersion(codeSystemINT, Integer.parseInt(TEST_DEPENDENCY_ET), "TESTING");
-	}
-	
+	@Autowired
+	private CodeSystemController codeSystemController;
+
+	@Autowired
+	private CodeSystemUpgradeService codeSystemUpgradeService;
+
 	@Test
-	void testVersionedCodeSystemGeneration() throws InterruptedException, ServiceException {
-		MemberSearchRequest searchRequest = new MemberSearchRequest().referenceSet(Concepts.REFSET_MODULE_DEPENDENCY);
-		Page<ReferenceSetMember> mdrPage = rmService.findMembers(Branch.MAIN, searchRequest, PageRequest.of(0,10));
-		//The model module has no dependencies, so we only expect 1 row for the core module
-		assertEquals(1, mdrPage.getContent().size());
-		assertEquals(Concepts.CORE_MODULE, mdrPage.getContent().get(0).getModuleId());
-		assertEquals(Concepts.MODEL_MODULE, mdrPage.getContent().get(0).getReferencedComponentId());
-		assertEquals(TEST_DEPENDENCY_ET, mdrPage.getContent().get(0).getEffectiveTime());
-		assertEquals(TEST_DEPENDENCY_ET, mdrPage.getContent().get(0).getAdditionalField(ModuleDependencyService.SOURCE_ET));
-		assertEquals(TEST_DEPENDENCY_ET, mdrPage.getContent().get(0).getAdditionalField(ModuleDependencyService.TARGET_ET));
+	void clearSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenGivenNull() {
+		// when
+		boolean success = mdService.clearSourceAndTargetEffectiveTimes(null);
+
+		// then
+		assertFalse(success);
 	}
 
 	@Test
-	void testInternationalMdrGeneration() throws InterruptedException, ServiceException {
-		createConcept("116680003", Concepts.CORE_MODULE, Branch.MAIN);
-		createConcept("10000200", Concepts.MODEL_MODULE, Branch.MAIN);
-		Set<ReferenceSetMember> mdr = mdService.generateModuleDependencies(Branch.MAIN, TEST_ET, null, false, null);
-		//The model module has no dependencies, so we only expect 1 row for the core module
-		assertEquals(1, mdr.size());
-		ReferenceSetMember first = mdr.iterator().next();
-		assertEquals(Concepts.CORE_MODULE, first.getModuleId());
-		assertEquals(Concepts.MODEL_MODULE, first.getReferencedComponentId());
-		assertEquals(TEST_ET, first.getEffectiveTime());
-		assertEquals(TEST_ET, first.getAdditionalField(ModuleDependencyService.SOURCE_ET));
-		assertEquals(TEST_ET, first.getAdditionalField(ModuleDependencyService.TARGET_ET));
-	}
-	
-	@Test
-	void testMsMdrGeneration() throws InterruptedException, ServiceException {
-		createConcept("116680003", Concepts.CORE_MODULE, Branch.MAIN);
-		CodeSystem codeSystemXY = new CodeSystem(TEST_CS_MS, TEST_CS_PATH);
-		
-		//Creating the code system after MAIN has been versioned should ensure the dependencyVersionEffectiveTime 
-		//is picked up from there
-		codeSystemService.createCodeSystem(codeSystemXY);
-		createConcept(TEST_MODULE, TEST_MODULE, TEST_CS_PATH);
-		
-		//To be detected as an extension, and therefore not include modules found on MAIN
-		//We need to list a dependencyPackage in the metadata
-		Metadata metadata = new Metadata();
-		metadata.putString(BranchMetadataKeys.DEPENDENCY_PACKAGE, "Some Value");
-		branchService.updateMetadata(TEST_CS_PATH, metadata);
-		Set<ReferenceSetMember> mdr = mdService.generateModuleDependencies(TEST_CS_PATH, TEST_ET, null, false, null);
-		
-		//Working with a single MS module we expect to have dependencies to both the core and model module
-		assertEquals(2, mdr.size());
-		assertTrue(resultsContain(mdr, TEST_MODULE, Concepts.CORE_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE, Concepts.MODEL_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-	}
-	
-	@Test
-	void testCircularMdrGeneration() throws InterruptedException, ServiceException {
-		createConcept("116680003", Concepts.CORE_MODULE, Branch.MAIN);
-		CodeSystem codeSystemXY = new CodeSystem(TEST_CS_MS, TEST_CS_PATH);
-		
-		//Creating the code system after MAIN has been versioned should ensure the dependencyVersionEffectiveTime 
-		//is picked up from there
-		codeSystemService.createCodeSystem(codeSystemXY);
-		createConcept(TEST_MODULE, TEST_MODULE, TEST_CS_PATH);
-		
-		//To be detected as an extension, and therefore not include modules found on MAIN
-		//We need to list a dependencyPackage in the metadata
-		Metadata metadata = new Metadata();
-		metadata.putString(BranchMetadataKeys.DEPENDENCY_PACKAGE, "Some Value");
-		branchService.updateMetadata(TEST_CS_PATH, metadata);
-		
-		//Now create two exisiting MDRS members that reference each other
-		ReferenceSetMember rm1 = createRefsetMemberMdrs(TEST_MODULE, TEST_MODULE2);
-		rmService.createMember(TEST_CS_PATH, rm1);
-		
-		ReferenceSetMember rm2 = createRefsetMemberMdrs(TEST_MODULE2, TEST_MODULE);
-		rmService.createMember(TEST_CS_PATH, rm2);
-		
-		Set<ReferenceSetMember> mdr = mdService.generateModuleDependencies(TEST_CS_PATH, TEST_ET, null, false, null);
-		
-		//Working with a 2 mutually dependent modules we expect to see 6 entries
-		//Each module to both the core and the model module (2 x 2 = 4)
-		//And each module to the other (1 x 2 = 2)
-		//Watch that TEST_ET is the time of the extension and the Depedency Time is the ET on MAIN
-		assertEquals(6, mdr.size());
-		assertTrue(resultsContain(mdr, TEST_MODULE, Concepts.CORE_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE, Concepts.MODEL_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE2, Concepts.CORE_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE2, Concepts.MODEL_MODULE, TEST_ET, TEST_ET, TEST_DEPENDENCY_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE, TEST_MODULE2, TEST_ET, TEST_ET, TEST_ET));
-		assertTrue(resultsContain(mdr, TEST_MODULE2, TEST_MODULE, TEST_ET, TEST_ET, TEST_ET));
+	void clearSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenGivenUnknownBranch() {
+		// when
+		boolean success = mdService.clearSourceAndTargetEffectiveTimes("MAIN/i-dont-exist");
+
+		// then
+		assertFalse(success);
 	}
 
-	private ReferenceSetMember createRefsetMemberMdrs(String moduleId, String targetModuleId) {
-		ReferenceSetMember rm = new ReferenceSetMember();
-		rm.setMemberId(UUID.randomUUID().toString());
-		rm.setModuleId(moduleId);
-		rm.setRefsetId(Concepts.REFSET_MODULE_DEPENDENCY);
-		rm.setReferencedComponentId(targetModuleId);
-		rm.setActive(true);
-		rm.setCreating(true);
-		return rm;
+	@Test
+	void clearSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenBranchHasNoMetadata() {
+		// given
+		branchService.create("MAIN/projectA");
+
+		// before
+		Page<ReferenceSetMember> page = referenceSetMemberService.findMembers("MAIN/projectA", new MemberSearchRequest().referenceSet(MODULE_DEPENDENCY_REFERENCE_SET), ComponentService.LARGE_PAGE);
+		assertTrue(page.isEmpty());
+
+		// when
+		boolean success = mdService.clearSourceAndTargetEffectiveTimes("MAIN/projectA");
+		assertFalse(success);
+
+		// after
+		page = referenceSetMemberService.findMembers("MAIN/projectA", new MemberSearchRequest().referenceSet(MODULE_DEPENDENCY_REFERENCE_SET), ComponentService.LARGE_PAGE);
+		assertTrue(page.isEmpty());
 	}
 
-	private boolean resultsContain(Set<ReferenceSetMember> mdr, String sourceModule, String targetModule, String effectiveDate,
-			String sourceEffectiveDate, String targetEffectiveDate) {
-		for (ReferenceSetMember rm : mdr) {
-			if (rm.getModuleId().equals(sourceModule) &&
-					rm.getReferencedComponentId().equals(targetModule) &&
-					rm.getEffectiveTime().equals(effectiveDate) &&
-					rm.getAdditionalField(ModuleDependencyService.SOURCE_ET).equals(sourceEffectiveDate) &&
-					rm.getAdditionalField(ModuleDependencyService.TARGET_ET).equals(targetEffectiveDate)) {
-				return true;
-			}
+	@Test
+	void clearSourceAndTargetEffectiveTimes_ShouldDoExpected_WhenGivenInternational() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		branchService.updateMetadata(intMain, Map.of(Config.DEFAULT_MODULE_ID_KEY, CORE_MODULE));
+
+		// Create module dependency entry manually
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		String mdrsId = referenceSetMemberService.createMember(intMain, mdrs).getMemberId();
+
+		// Create top level concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		// Assert Concept post versioning
+		concept = conceptService.find(medicineId, intMain);
+		assertTrue(concept.isReleased());
+		assertEquals(20250101, concept.getEffectiveTimeI());
+		assertEquals(20250101, concept.getReleasedEffectiveTime());
+
+		// Assert MDRS post versioning
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250101, mdrs.getEffectiveTimeI());
+		assertEquals(20250101, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+
+		// Start new authoring cycle
+		boolean clearSourceAndTargetEffectiveTimes = mdService.clearSourceAndTargetEffectiveTimes(intMain);
+		assertTrue(clearSourceAndTargetEffectiveTimes);
+
+		// Assert MDRS post new cycle
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertNull(mdrs.getEffectiveTimeI());
+		assertEquals(20250101, mdrs.getReleasedEffectiveTime());
+		assertNull(mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertNull(mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+
+		// Create another top level concept
+		concept = new Concept()
+				.addDescription(new Description("Vehicle (vehicle)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Vehicle").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String vehicleId = concept.getConceptId();
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250201, "20250201");
+		codeSystemController.updateVersion("SNOMEDCT", 20250201, "20250201.zip");
+
+		// Assert Concept post versioning
+		concept = conceptService.find(vehicleId, intMain);
+		assertTrue(concept.isReleased());
+		assertEquals(20250201, concept.getEffectiveTimeI());
+		assertEquals(20250201, concept.getReleasedEffectiveTime());
+
+		// Assert MDRS post versioning
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250201, mdrs.getEffectiveTimeI());
+		assertEquals(20250201, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250201", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250201", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+	@Test
+	void clearSourceAndTargetEffectiveTimes_ShouldDoExpected_WhenGivenExtension() throws ServiceException {
+		String intMain = "MAIN";
+		String extMain = "MAIN/SNOMEDCT-XX";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+
+		// International authors
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+
+		// International versions
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		// Extension created
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", extMain));
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				extMain
+		);
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata(
+				extMain,
+				Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId,
+						Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId),
+						Config.DEPENDENCY_PACKAGE, "20250101.zip"
+				)
+		);
+
+		// Extension authors
+		ReferenceSetMember mdrsExtension = new ReferenceSetMember();
+		mdrsExtension.setModuleId(extModuleId);
+		mdrsExtension.setReferencedComponentId(CORE_MODULE);
+		mdrsExtension.setActive(true);
+		mdrsExtension.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		String mdrsExtensionId = referenceSetMemberService.createMember(extMain, mdrsExtension).getMemberId();
+
+		concept = new Concept()
+				.addDescription(new Description("Vehicle (vehicle)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Vehicle").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, extMain);
+		String vehicleId = concept.getConceptId();
+
+		// Extension versions
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20250102, "20250102");
+		codeSystemController.updateVersion("SNOMEDCT-XX", 20250102, "20250102.zip");
+
+		// Assert Extension's MDRS before new authoring cycle
+		mdrs = referenceSetMemberService.findMember(extMain, mdrsExtensionId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getEffectiveTimeI());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+		assertEquals("20250102", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+
+		// Start new authoring cycle
+		boolean clearSourceAndTargetEffectiveTimes = mdService.clearSourceAndTargetEffectiveTimes(extMain);
+		assertTrue(clearSourceAndTargetEffectiveTimes);
+
+		// Assert Extension's MDRS after new authoring cycle
+		mdrs = referenceSetMemberService.findMember(extMain, mdrsExtensionId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertNull(mdrs.getEffectiveTimeI());
+		assertNull(mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+	@Test
+	void setSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenGivenInvalidParameters() {
+		// given
+		List<Object[]> testCases = new ArrayList<>();
+		testCases.add(new Object[]{null, 20250101});
+		testCases.add(new Object[]{"MAIN", null});
+		testCases.add(new Object[]{"unknown", 20250101});
+
+		for (Object[] testCase : testCases) {
+			Object first = testCase[0];
+			Object second = testCase[1];
+
+			// when
+			boolean success = mdService.setSourceAndTargetEffectiveTimes(
+					first == null ? null : String.valueOf(first),
+					second == null ? null : Integer.parseInt(String.valueOf(second))
+			);
+
+			// then
+			assertFalse(success);
 		}
-		return false;
 	}
 
-	private void createConcept(String conceptId, String moduleId, String path) throws ServiceException {
-		conceptService.create(
-				new Concept(conceptId)
-						.setModuleId(moduleId)
-						.addDescription(
-								new Description("Heart")
-										.setCaseSignificance("CASE_INSENSITIVE")
-										.setAcceptabilityMap(Collections.singletonMap(Concepts.US_EN_LANG_REFSET,
-												Concepts.descriptionAcceptabilityNames.get(Concepts.ACCEPTABLE)))
-						)
-						.addDescription(
-								new Description("Heart structure (body structure)")
-										.setTypeId(Concepts.FSN)
-										.setCaseSignificance("CASE_INSENSITIVE")
-										.setAcceptabilityMap(Collections.singletonMap(Concepts.US_EN_LANG_REFSET,
-												Concepts.descriptionAcceptabilityNames.get(Concepts.ACCEPTABLE))))
-						.addRelationship(
-								new Relationship(Concepts.ISA, Concepts.SNOMEDCT_ROOT)
-						)
-						.addAxiom(
-								new Relationship(Concepts.ISA, Concepts.SNOMEDCT_ROOT)
-						),
-				path);
+	@Test
+	void setSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenGivenBranchNotFoundForCodeSystem() {
+		// given
+		branchService.deleteAll();
+
+		// when
+		boolean success = mdService.setSourceAndTargetEffectiveTimes("MAIN", 20250101);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setSourceAndTargetEffectiveTimes_ShouldReturnExpected_WhenNoMDRS() {
+		// when
+		boolean success = mdService.setSourceAndTargetEffectiveTimes("MAIN", 20250101);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setSourceAndTargetEffectiveTimes_ShouldUpdateMDRS_WhenGivenInternational() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		branchService.updateMetadata(intMain, Map.of(Config.DEFAULT_MODULE_ID_KEY, CORE_MODULE));
+
+		// Create module dependency entry manually
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		String mdrsId = referenceSetMemberService.createMember(intMain, mdrs).getMemberId();
+
+		// Create top level concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		String medicineId = concept.getConceptId();
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		// Assert Concept post versioning
+		concept = conceptService.find(medicineId, intMain);
+		assertTrue(concept.isReleased());
+		assertEquals(20250101, concept.getEffectiveTimeI());
+		assertEquals(20250101, concept.getReleasedEffectiveTime());
+
+		// Assert MDRS post versioning
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250101, mdrs.getEffectiveTimeI());
+		assertEquals(20250101, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+	@Test
+	void setSourceAndTargetEffectiveTimes_ShouldUpdateMDRS_WhenGivenExtension() throws ServiceException {
+		String intMain = "MAIN";
+		String extMain = "MAIN/SNOMEDCT-XX";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		branchService.updateMetadata(intMain, Map.of(Config.DEFAULT_MODULE_ID_KEY, CORE_MODULE));
+
+		// Create module dependency entry manually
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		referenceSetMemberService.createMember(intMain, mdrs).getMemberId();
+
+		// Create top level concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+		concept.getConceptId();
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		// Extension created
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", extMain));
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				extMain
+		);
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata(
+				extMain,
+				Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId,
+						Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId),
+						Config.DEPENDENCY_PACKAGE, "20250101.zip"
+				)
+		);
+
+		// Extension authors
+		ReferenceSetMember mdrsExtension = new ReferenceSetMember();
+		mdrsExtension.setModuleId(extModuleId);
+		mdrsExtension.setReferencedComponentId(CORE_MODULE);
+		mdrsExtension.setActive(true);
+		mdrsExtension.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		String mdrsExtensionId = referenceSetMemberService.createMember(extMain, mdrsExtension).getMemberId();
+
+		concept = new Concept()
+				.addDescription(new Description("Vehicle (vehicle)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Vehicle").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, extMain);
+
+		// Extension versions
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20250102, "20250102");
+		codeSystemController.updateVersion("SNOMEDCT-XX", 20250102, "20250102.zip");
+
+		// Assert MDRS post versioning
+		mdrs = referenceSetMemberService.findMember(extMain, mdrsExtensionId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getEffectiveTimeI());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250102", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldReturnExpected_WhenGivenNullPath() {
+		// when
+		boolean success = mdService.setTargetEffectiveTime(null, 20250101);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldReturnExpected_WhenGivenNullEffectiveTime() {
+		// when
+		boolean success = mdService.setTargetEffectiveTime("MAIN", null);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldReturnExpected_WhenGivenRoot() {
+		// when
+		boolean success = mdService.setTargetEffectiveTime("MAIN", 20250101);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldReturnExpected_WhenNoMDRS() throws ServiceException {
+		// given
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+		Concept concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				"MAIN/SNOMEDCT-XX"
+		);
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata(
+				"MAIN/SNOMEDCT-XX",
+				Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId,
+						Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId),
+						Config.DEPENDENCY_PACKAGE, "20250101.zip"
+				)
+		);
+
+		// when
+		boolean success = mdService.setTargetEffectiveTime("MAIN/SNOMEDCT-XX", 20250101);
+
+		// then
+		assertFalse(success);
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldNotUpdateMDRS_WhenGivenInternational() throws ServiceException {
+		String intMain = "MAIN";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		branchService.updateMetadata(intMain, Map.of(Config.DEFAULT_MODULE_ID_KEY, CORE_MODULE));
+
+		// Create module dependency entry manually
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		String mdrsId = referenceSetMemberService.createMember(intMain, mdrs).getMemberId();
+
+		// Create top level concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		// Assert MDRS post versioning
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250101, mdrs.getEffectiveTimeI());
+		assertEquals(20250101, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+
+		// Upgrade CodeSystem
+		boolean success = mdService.setTargetEffectiveTime("MAIN", 20250201);
+		assertFalse(success);
+
+		// Assert MDRS post upgrade (nothing has changed)
+		mdrs = referenceSetMemberService.findMember(intMain, mdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250101, mdrs.getEffectiveTimeI());
+		assertEquals(20250101, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+	@Test
+	void setTargetEffectiveTime_ShouldUpdateMDRS_WhenGivenExtension() throws ServiceException {
+		String intMain = "MAIN";
+		String extMain = "MAIN/SNOMEDCT-XX";
+		Map<String, String> intPreferred = Map.of(US_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED), GB_EN_LANG_REFSET, descriptionAcceptabilityNames.get(PREFERRED));
+		String ci = "CASE_INSENSITIVE";
+		Concept concept;
+		CodeSystem codeSystem;
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+
+		// Create module dependency entry manually
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(CORE_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		String mdrsId = referenceSetMemberService.createMember(intMain, mdrs).getMemberId();
+
+		// Create top level concept
+		concept = new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+
+		// Version CodeSystem
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+		codeSystemController.updateVersion("SNOMEDCT", 20250101, "20250101.zip");
+
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", extMain));
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				extMain
+		);
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata(
+				extMain,
+				Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId,
+						Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId),
+						Config.DEPENDENCY_PACKAGE, "20250101.zip"
+				)
+		);
+
+		// Extension authors
+		ReferenceSetMember mdrsExtension = new ReferenceSetMember();
+		mdrsExtension.setModuleId(extModuleId);
+		mdrsExtension.setReferencedComponentId(CORE_MODULE);
+		mdrsExtension.setActive(true);
+		mdrsExtension.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrsExtension.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		String mdrsExtensionId = referenceSetMemberService.createMember(extMain, mdrsExtension).getMemberId();
+
+		concept = new Concept()
+				.addDescription(new Description("Vehicle (vehicle)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Vehicle").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, extMain);
+
+		// Extension versions
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20250102, "20250102");
+		codeSystemController.updateVersion("SNOMEDCT-XX", 20250102, "20250102.zip");
+
+		// International authors
+		concept = new Concept()
+				.addDescription(new Description("Food (food)").setTypeId(FSN).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addDescription(new Description("Food").setTypeId(SYNONYM).setCaseSignificance(ci).setAcceptabilityMap(intPreferred))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT));
+		concept = conceptService.create(concept, intMain);
+
+		// International version
+		codeSystem = codeSystemService.find("SNOMEDCT");
+		codeSystemService.createVersion(codeSystem, 20250201, "20250201");
+		codeSystemController.updateVersion("SNOMEDCT", 20250201, "20250201.zip");
+
+		// Assert Extension before upgrade
+		mdrs = referenceSetMemberService.findMember(extMain, mdrsExtensionId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertEquals(20250102, mdrs.getEffectiveTimeI());
+		assertEquals("20250102", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+
+		// Upgrade Extension
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemUpgradeService.upgrade(null, codeSystem, 20250201, true);
+
+		// Assert Extension after upgrade
+		mdrs = referenceSetMemberService.findMember(extMain, mdrsExtensionId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertNull(mdrs.getEffectiveTimeI());
+		assertEquals("20250102", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250201", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+	}
+
+
+	@Test
+	void getCodeSystemBranchByModuleId() {
+		// Create International CodeSystem
+		CodeSystem main = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		// Add MDRS
+		ReferenceSetMember coreMdrs = new ReferenceSetMember();
+		coreMdrs.setModuleId(CORE_MODULE);
+		coreMdrs.setReferencedComponentId(MODEL_MODULE);
+		coreMdrs.setActive(true);
+		coreMdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		coreMdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		coreMdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		referenceSetMemberService.createMember("MAIN", coreMdrs);
+		// Version MAIN here to avoid unpublished content from MAIN is being saved by extension during versioning
+		codeSystemService.createVersion(main, 20250101, "20250321 International release");
+
+		// Create LOINC CodeSystem
+		CodeSystem loincCodeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-LOINC", "MAIN/SNOMEDCT-LOINC"));
+		// Add MDRS
+		final String LOINC_MODULE = "11010000107";
+		ReferenceSetMember mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(LOINC_MODULE);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		referenceSetMemberService.createMember(loincCodeSystem.getBranchPath(), mdrs);
+
+		// Version LOINC
+		codeSystemService.createVersion(loincCodeSystem, 20250321, "20250321 loinc release");
+
+		// Create an extension CodeSystem
+		CodeSystem codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+
+		// Create MDRS
+		final String extensionModuleId = "2011000195101";
+		mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(extensionModuleId);
+		mdrs.setReferencedComponentId(CORE_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		referenceSetMemberService.createMember(codeSystem.getBranchPath(), mdrs);
+
+		// Additional dependency
+		mdrs = new ReferenceSetMember();
+		mdrs.setModuleId(extensionModuleId);
+
+		mdrs.setReferencedComponentId(LOINC_MODULE);
+		mdrs.setActive(true);
+		mdrs.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250321");
+		referenceSetMemberService.createMember(codeSystem.getBranchPath(), mdrs);
+
+		Map<String, String> results = mdService.getCodeSystemBranchByModuleId(Set.of(CORE_MODULE, MODEL_MODULE, LOINC_MODULE, extensionModuleId));
+		assertEquals(3, results.size());
+		assertEquals("MAIN", results.get(CORE_MODULE));
+		assertEquals("MAIN/SNOMEDCT-LOINC", results.get(LOINC_MODULE));
+		assertEquals("MAIN/SNOMEDCT-XX", results.get(extensionModuleId));
+	}
+
+	@Test
+	void getCodeSystemBranchByModuleId_coreModuleMdrsOnExtensionPrefersMain() {
+		// Create International CodeSystem with CORE_MODULE MDRS on MAIN
+		CodeSystem main = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		ReferenceSetMember coreMdrsMain = new ReferenceSetMember();
+		coreMdrsMain.setModuleId(CORE_MODULE);
+		coreMdrsMain.setReferencedComponentId(MODEL_MODULE);
+		coreMdrsMain.setActive(true);
+		coreMdrsMain.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		coreMdrsMain.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		coreMdrsMain.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "");
+		referenceSetMemberService.createMember("MAIN", coreMdrsMain);
+		codeSystemService.createVersion(main, 20250101, "20250321 International release");
+
+		// Create an extension CodeSystem with imported CORE_MODULE MDRS
+		CodeSystem extension = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+		ReferenceSetMember coreMdrsOnExtension = new ReferenceSetMember();
+		coreMdrsOnExtension.setModuleId(CORE_MODULE);
+		coreMdrsOnExtension.setReferencedComponentId(MODEL_MODULE);
+		coreMdrsOnExtension.setActive(true);
+		coreMdrsOnExtension.setRefsetId(Concepts.MODULE_DEPENDENCY_REFERENCE_SET);
+		coreMdrsOnExtension.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		coreMdrsOnExtension.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		referenceSetMemberService.createMember(extension.getBranchPath(), coreMdrsOnExtension);
+
+		Map<String, String> results = mdService.getCodeSystemBranchByModuleId(Set.of(CORE_MODULE));
+		assertEquals("MAIN", results.get(CORE_MODULE));
 	}
 
 }

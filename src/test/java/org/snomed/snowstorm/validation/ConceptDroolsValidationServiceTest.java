@@ -2,7 +2,6 @@ package org.snomed.snowstorm.validation;
 
 import io.kaicode.elasticvc.api.BranchCriteria;
 import io.kaicode.elasticvc.api.VersionControlHelper;
-import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,6 +9,7 @@ import org.snomed.snowstorm.AbstractTest;
 import org.snomed.snowstorm.TestConfig;
 import org.snomed.snowstorm.core.data.domain.Concept;
 import org.snomed.snowstorm.core.data.domain.Concepts;
+import org.snomed.snowstorm.core.data.services.AxiomConversionService;
 import org.snomed.snowstorm.core.data.services.ConceptService;
 import org.snomed.snowstorm.core.data.services.QueryService;
 import org.snomed.snowstorm.core.data.services.ServiceException;
@@ -19,6 +19,9 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 import java.util.Collections;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = TestConfig.class)
@@ -36,6 +39,9 @@ class ConceptDroolsValidationServiceTest extends AbstractTest {
 	@Autowired
 	private QueryService queryService;
 
+	@Autowired
+	private AxiomConversionService axiomConversionService;
+
 	private ConceptDroolsValidationService validationService;
 
 	@BeforeEach
@@ -46,14 +52,14 @@ class ConceptDroolsValidationServiceTest extends AbstractTest {
 
 		BranchCriteria branchCriteria = versionControlHelper.getBranchCriteria(branch);
 		DisposableQueryService disposableQueryService = new DisposableQueryService(queryService, branch, branchCriteria);
-		validationService = new ConceptDroolsValidationService(branchCriteria, elasticsearchOperations, disposableQueryService, Collections.emptySet());
+		validationService = new ConceptDroolsValidationService(branchCriteria, elasticsearchOperations, disposableQueryService, Collections.emptySet(), versionControlHelper, axiomConversionService);
 	}
 
 	@Test
 	void isActive() {
-		Assert.assertTrue(validationService.isActive("100001"));
-		Assert.assertFalse(validationService.isActive("100002"));
-		Assert.assertFalse(validationService.isActive("100003"));
+		assertTrue(validationService.isActive("100001"));
+		assertFalse(validationService.isActive("100002"));
+		assertFalse(validationService.isActive("100003"));
 	}
 
 }

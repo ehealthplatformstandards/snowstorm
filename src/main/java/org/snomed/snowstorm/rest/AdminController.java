@@ -23,6 +23,8 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static java.lang.Long.parseLong;
+
 @RestController
 @Tag(name = "Admin", description = "-")
 @RequestMapping(value = "/admin", produces = "application/json")
@@ -58,6 +60,9 @@ public class AdminController {
 	@Autowired
 	private ECLQueryService eclQueryService;
 
+	@Autowired
+	private ReferencedConceptsLookupUpdateService refsetConceptsLookupUpdateService;
+
 	@Operation(summary = "Rebuild the description index.",
 			description = "Use this if the search configuration for international character handling of a language has been " +
 					"set or updated after importing content of that language. " +
@@ -92,6 +97,45 @@ public class AdminController {
 
 		final Map<String, Integer> updateCount = queryConceptUpdateService.rebuildStatedAndInferredSemanticIndex(BranchPathUriUtil.decodePath(branch), dryRun);
 		return new UpdatedDocumentCount(updateCount);
+	}
+
+
+	@Operation(summary = "Rebuild the referenced concepts lookup of the branch.",
+			description = """
+                    This is to rebuild referenced concepts lookups on the branch for fast ECL member of queries. \s
+                    When refsetIds are provided, referenced concepts lookup for the specified reference sets will be rebuilt. \s
+                    Otherwise, the referenced concepts lookup for all configured reference sets will be rebuilt. \s
+                    See ecl.concepts-lookup.refset.ids in the application.properties file more detail \s
+                    To enable lookups for a reference set, you need to rebuild this on the CodeSystem branch first and rebase projects/tasks \s
+                    By default snowstorm will skip generating concepts lookup when total referenced concepts is below 1000. To force it you can set the disableThresholdCheck flag to true. \s
+                    Setting the dryRun to true when rebuilding will log a summary of the changes required without persisting the changes.
+                    If no changes are required or dryRun is set the empty commit used to run this function will be rolled back. \s
+                    N.B. refsetIds must be self or descendant of ecl.concepts-lookup.refset.id configured in the application.properties file. \s
+                    """)
+	@PostMapping(value = "/{branch}/actions/rebuild-referenced-concepts-lookup")
+	@PreAuthorize("hasPermission('ADMIN', #branch)")
+	public UpdatedDocumentCount rebuildBranchReferencedConceptsLookups(@PathVariable String branch, @RequestParam(required = false) List<Long> refsetIds,
+																	   @RequestParam(required = false, defaultValue = "false") boolean disableThresholdCheck,
+																	   @RequestParam(required = false, defaultValue = "false") boolean dryRun) {
+
+		final Map<String, Integer> updateCount = refsetConceptsLookupUpdateService.rebuild(BranchPathUriUtil.decodePath(branch), refsetIds, disableThresholdCheck, dryRun);
+		return new UpdatedDocumentCount(updateCount);
+	}
+
+
+	@Operation(summary = "Remove the referenced concepts lookup of the branch.",
+			description = """
+                    This is to remove referenced concepts lookups on the branch for fast ECL member of queries. \s
+                    When refsetIds are provided, referenced concepts lookup for the specified reference sets will be removed. \s
+                    Otherwise, the referenced concepts lookup for all configured reference sets will be removed. \s
+                    See ecl.concepts-lookup.refset.ids in the application.properties file more detail \s
+                    To enable lookups for a reference set again, you need to rebuild them \s
+                    N.B. refsetIds must be self or descendant of ecl.concepts-lookup.refset.id configured in the application.properties file. \s
+                    """)
+	@PostMapping(value = "/{branch}/actions/remove-referenced-concepts-lookup")
+	@PreAuthorize("hasPermission('ADMIN', #branch)")
+	public void removeBranchReferencedConceptsLookups(@PathVariable String branch, @RequestParam(required = false) List<Long> refsetIds) {
+		refsetConceptsLookupUpdateService.remove(BranchPathUriUtil.decodePath(branch), refsetIds);
 	}
 
 	@Operation(summary = "Force update of definition statuses of all concepts based on axioms.",

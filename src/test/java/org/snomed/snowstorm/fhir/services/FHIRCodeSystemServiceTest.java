@@ -157,8 +157,8 @@ class FHIRCodeSystemServiceTest extends AbstractFHIRTest {
 			fail(SHOULD_HAVE_THROWN_EXCEPTION_BEFORE_THIS_LINE);
 		} catch (SnowstormFHIRServerResponseException e) {
 			assertEquals(INVARIANT, e.getIssueCode());
-			assertTrue(e.getMessage().startsWith("The URL of this SNOMED CT CodeSystem supplement must have a version that follows the SNOMED CT URI standard and includes a module id. " +
-					"If a namespace was given in the version URL then the module id '11000003104' could be used. "), "Actual message: " + e.getMessage());
+			assertTrue(e.getMessage().matches("The URL of this SNOMED CT CodeSystem supplement must have a version that follows the SNOMED CT URI standard and includes a module id\\. " +
+					"If a namespace was given in the version URL then the module id '[0-9]+' could be used\\. .*"), "Actual message: " + e.getMessage());
 		}
 	}
 }

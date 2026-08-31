@@ -18,6 +18,7 @@ import org.snomed.snowstorm.core.data.services.*;
 import org.snomed.snowstorm.core.data.services.classification.ClassificationService;
 import org.snomed.snowstorm.core.data.services.servicehook.CommitServiceHookClient;
 import org.snomed.snowstorm.core.data.services.traceability.Activity;
+import org.snomed.snowstorm.ecl.ReferencedConceptsLookupService;
 import org.snomed.snowstorm.rest.View;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +27,8 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.data.elasticsearch.core.query.DeleteQuery;
+import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -77,6 +80,9 @@ public abstract class AbstractTest {
 	@Autowired
 	private ElasticsearchOperations elasticsearchOperations;
 
+	@Autowired
+	private ReferencedConceptsLookupService referencedConceptsLookupService;
+
 	@Value("${ims-security.roles.enabled}")
 	private boolean rolesEnabled;
 
@@ -105,6 +111,7 @@ public abstract class AbstractTest {
 			classificationService.deleteAll();
 			permissionService.deleteAll();
 			identifierComponentService.deleteAll();
+			referencedConceptsLookupService.deleteAll();
 		} catch (OptimisticLockingFailureException e) {
 			// Try again
 			Thread.sleep(100);
@@ -171,7 +178,8 @@ public abstract class AbstractTest {
 	}
 
 	protected void deleteAllQueryConceptsAndRefresh() {
-		NativeQuery deleteQuery = new NativeQueryBuilder().withQuery(new MatchAllQuery.Builder().build()._toQuery()).build();
+		Query query = new NativeQueryBuilder().withQuery(new MatchAllQuery.Builder().build()._toQuery()).build();
+		DeleteQuery deleteQuery = DeleteQuery.builder(query).build();
 		elasticsearchOperations.delete(deleteQuery, QueryConcept.class, elasticsearchOperations.getIndexCoordinatesFor(QueryConcept.class));
 		elasticsearchOperations.indexOps(QueryConcept.class).refresh();
 	}

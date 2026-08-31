@@ -3,10 +3,7 @@ package org.snomed.snowstorm.fhir.services;
 import ca.uhn.fhir.jpa.entity.TermCodeSystemVersion;
 import ca.uhn.fhir.jpa.entity.TermConcept;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
-import co.elastic.clients.elasticsearch._types.query_dsl.TermQuery;
 import com.google.common.collect.Iterables;
-
-import org.hl7.fhir.r4.model.BooleanType;
 import org.hl7.fhir.r4.model.CodeSystem;
 import org.hl7.fhir.r4.model.CodeType;
 import org.slf4j.Logger;
@@ -21,10 +18,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -98,7 +96,7 @@ public class FHIRConceptService {
 		}
 
 		FHIRGraphBuilder graphBuilder = new FHIRGraphBuilder();
-		if (Objects.isNull(codeSystemVersion.getHierarchyMeaning()) || "is-a".equals(codeSystemVersion.getHierarchyMeaning())) {
+		if ("is-a".equals(codeSystemVersion.getHierarchyMeaning())) {
 			// Record transitive closure of concepts for subsumption testing
 			for (FHIRConcept concept : concepts) {
 				for (String parentCode : concept.getParents()) {
@@ -125,13 +123,6 @@ public class FHIRConceptService {
 		}
 
 		Set<String> props = new HashSet<>();
-		//treat extensions as properties, until better solution...
-		concepts.forEach(concept ->{
-			concept.getExtensions().forEach((key,value)->{
-				concept.getProperties().put(key,value);
-			});
-		});
-
 		concepts.stream()
 				.filter(concept -> concept.getProperties() != null)
 				.forEach(concept -> props.addAll(concept.getProperties().keySet()));
@@ -163,10 +154,6 @@ public class FHIRConceptService {
 		}
 	}
 
-	public Page<FHIRConcept> findConcepts(String idWithVersion, PageRequest pageRequest){
-		return conceptRepository.findByCodeSystemVersion(idWithVersion, pageRequest);
-	}
-
 	public void deleteExistingCodes(String idWithVersion) {
 		Page<FHIRConcept> existingConcepts = conceptRepository.findByCodeSystemVersion(idWithVersion, PageRequest.of(0, 1));
 		long totalExisting = existingConcepts.getTotalElements();
@@ -192,23 +179,25 @@ public class FHIRConceptService {
 		return conceptRepository.findFirstByCodeSystemVersionAndCode(systemVersion.getId(), code);
 	}
 
+	public Page<FHIRConcept> findConcepts(String idWithVersion, PageRequest pageRequest) {
+		return conceptRepository.findByCodeSystemVersion(idWithVersion, pageRequest);
+	}
+
 	public Page<FHIRConcept> findConcepts(BoolQuery.Builder fhirConceptQuery, PageRequest pageRequest) {
 		NativeQuery searchQuery = new NativeQueryBuilder()
 				.withQuery(fhirConceptQuery.build()._toQuery())
+				.withSort(Sort.by(FHIRConcept.Fields.DISPLAY_LENGTH, FHIRConcept.Fields.CODE))
 				.withPageable(pageRequest)
 				.build();
 		searchQuery.setTrackTotalHits(true);
 		updateQueryWithSearchAfter(searchQuery, pageRequest);
-
-		logger.debug("QUERY:"+searchQuery.getQuery().toString());
-
 		return toPage(elasticsearchOperations.search(searchQuery, FHIRConcept.class), pageRequest);
-
 	}
 
-	public SearchAfterPage<String> findConceptCodes(BoolQuery.Builder fhirConceptQuery, PageRequest pageRequest) {
+	public SearchAfterPage<String> findConceptCodes(BoolQuery fhirConceptQuery, PageRequest pageRequest) {
 		NativeQuery searchQuery = new NativeQueryBuilder()
-				.withQuery(fhirConceptQuery.build()._toQuery())
+				.withQuery(fhirConceptQuery._toQuery())
+				.withSort(Sort.by(FHIRConcept.Fields.CODE))
 				.withPageable(pageRequest)
 				.build();
 		searchQuery.setTrackTotalHits(true);
@@ -220,13 +209,5 @@ public class FHIRConceptService {
 
 	public Page<FHIRConcept> findConcepts(Set<String> codes, FHIRCodeSystemVersion codeSystemVersion, Pageable pageable) {
 		return conceptRepository.findByCodeSystemVersionAndCodeIn(codeSystemVersion.getId(), codes, pageable);
-	}
-
-	public Page<FHIRConcept> findConceptsWithoutSystem(String code, PageRequest pageRequest) {
-		BoolQuery.Builder bool = new BoolQuery.Builder();
-		bool.must(new TermQuery.Builder().value(code).field("code").build()._toQuery());
-
-		return findConcepts(bool,pageRequest );
-
 	}
 }

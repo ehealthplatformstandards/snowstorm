@@ -3,7 +3,7 @@ package org.snomed.snowstorm.fhir.services;
 import ca.uhn.fhir.jpa.entity.TermConcept;
 import ca.uhn.fhir.util.UrlUtil;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
-import co.elastic.clients.elasticsearch._types.query_dsl.PrefixQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.Operator;
 import com.google.common.base.Strings;
 import io.kaicode.elasticvc.api.BranchCriteria;
 import io.kaicode.elasticvc.api.VersionControlHelper;
@@ -21,6 +21,7 @@ import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.domain.QueryConcept;
 import org.snomed.snowstorm.core.data.domain.ReferenceSetMember;
 import org.snomed.snowstorm.core.data.services.ConceptService;
+import org.snomed.snowstorm.core.data.services.DescriptionService;
 import org.snomed.snowstorm.core.data.services.QueryService;
 import org.snomed.snowstorm.core.data.services.ReferenceSetMemberService;
 import org.snomed.snowstorm.core.data.services.identifier.IdentifierHelper;
@@ -43,11 +44,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.*;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
+import org.springframework.data.elasticsearch.client.elc.Queries;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.stereotype.Service;
 
 import java.net.URLDecoder;
+import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Function;
@@ -418,7 +421,7 @@ public class FHIRValueSetService {
 						int pageSize = Math.min(limitRequested - allConceptCodes.size(), LARGE_PAGE.getPageSize());
 						largePageRequest = SearchAfterPageRequest.of(previousPage.getSearchAfter(), pageSize, previousPage.getSort());
 					}
-					SearchAfterPage<String> page = conceptService.findConceptCodes(fhirConceptQuery, largePageRequest);
+					SearchAfterPage<String> page = conceptService.findConceptCodes(fhirConceptQuery.build(), largePageRequest);
 					allConceptCodes.addAll(page.getContent());
 					loadedAll = page.getNumberOfElements() < largePageRequest.getPageSize();
 					if (previousPage == null) {
@@ -887,7 +890,10 @@ public class FHIRValueSetService {
 		BoolQuery.Builder masterQuery = bool();
 		masterQuery.must(contentQuery.build()._toQuery());
 		if (termFilter != null) {
-			masterQuery.must(PrefixQuery.of(pq -> pq.field(FHIRConcept.Fields.DISPLAY).value(termFilter.toLowerCase()))._toQuery());
+			List<String> elasticAnalyzedWords = DescriptionService.analyze(termFilter, new StandardAnalyzer());
+			String searchTerm = DescriptionService.constructSearchTerm(elasticAnalyzedWords);
+			String query = DescriptionService.constructSimpleQueryString(searchTerm);
+			masterQuery.filter(Queries.queryStringQuery(FHIRConcept.Fields.DISPLAY, query, Operator.And, 2.0f)._toQuery());
 		}
 		return masterQuery;
 	}

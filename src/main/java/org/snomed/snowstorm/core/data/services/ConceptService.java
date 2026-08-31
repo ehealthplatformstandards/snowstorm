@@ -867,7 +867,7 @@ public class ConceptService extends ComponentService {
 						.must(branchCriteria.getEntityBranchCriteria(Concept.class))
 						.must(termQuery(SnomedComponent.Fields.ACTIVE, true))))
 				.withPageable(LARGE_PAGE)
-				.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null));
+				.withSourceFilter(new FetchSourceFilter(true, new String[]{Concept.Fields.CONCEPT_ID}, null));
 		List<Long> ids = new LongArrayList();
 		try (SearchHitsIterator<Concept> conceptStream = elasticsearchOperations.searchForStream(queryBuilder.build(), Concept.class)) {
 			conceptStream.forEachRemaining(c -> ids.add(c.getContent().getConceptIdAsLong()));
@@ -888,6 +888,17 @@ public class ConceptService extends ComponentService {
 		final Branch sourceBranch = branchService.findBranchOrThrow(sourceBranchPath, true);
 		final Branch destinationBranch = branchService.findBranchOrThrow(destinationBranchPath, true);
 
+		CodeSystem codeSystem = codeSystemService.findClosestCodeSystemUsingAnyBranch(destinationBranchPath, false);
+		if (codeSystem != null) {
+			List<CodeSystemVersion> codeSystemVersions = codeSystemService.findAllVersions(codeSystem.getShortName(), true, true);
+			String branchPath = destinationBranch.getPath();
+			for (CodeSystemVersion codeSystemVersion : codeSystemVersions) {
+				if (Objects.equals(branchPath, codeSystemVersion.getBranchPath())) {
+					throw new ServiceException("Cannot donate concepts from " + sourceBranchPath + " to versioned " + destinationBranchPath);
+				}
+			}
+		}
+
 		if (getDefaultModuleId(sourceBranch).equals(getDefaultModuleId(destinationBranch))) {
 			throw new ServiceException("Cannot donate concepts from " + sourceBranchPath + " to " + destinationBranchPath + " as they are from the same module: " + getDefaultModuleId(sourceBranch));
 		}
@@ -897,7 +908,7 @@ public class ConceptService extends ComponentService {
 		logger.info("Searching concepts to donate from {} to {} using ECL expression: '{}' (includeDependencies = '{}')", sourceBranchPath, destinationBranchPath, ecl, includeDependencies);
 		QueryService.ConceptQueryBuilder queryBuilder = queryService.createQueryBuilder(true)
 				.ecl(ecl)
-				.module(Long.parseLong(getDefaultModuleId(sourceBranch)))
+				.module(Optional.ofNullable(getExpectedExtensionModules(sourceBranch)).orElse(List.of(Long.valueOf(getDefaultModuleId(sourceBranch)))))
 				.activeFilter(true)
 				.isNullEffectiveTime(false)
 				.resultLanguageDialects(languageDialects);
@@ -917,6 +928,10 @@ public class ConceptService extends ComponentService {
 
 	private String getDefaultModuleId(Branch branch) {
 		return branch.getMetadata().containsKey(BranchMetadataKeys.DEFAULT_MODULE_ID) ? branch.getMetadata().getString(BranchMetadataKeys.DEFAULT_MODULE_ID) : Concepts.CORE_MODULE;
+	}
+
+	private List<Long> getExpectedExtensionModules(Branch branch) {
+		return branch.getMetadata().containsKey(BranchMetadataKeys.EXPECTED_EXTENSION_MODULES) ? branch.getMetadata().getList(BranchMetadataKeys.EXPECTED_EXTENSION_MODULES).stream().map(Long::valueOf).toList() : null;
 	}
 
 	private void joinAnnotations(BranchCriteria branchCriteria, Map<String, Concept> conceptIdMap, Map<String, ConceptMini> conceptMiniMap, List<LanguageDialect> languageDialects, TimerUtil timer) {

@@ -15,12 +15,14 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArraySet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.langauges.ecl.domain.filter.*;
 import org.snomed.snowstorm.config.Config;
 import org.snomed.snowstorm.core.data.domain.*;
 import org.snomed.snowstorm.core.data.repositories.ReferenceSetMemberRepository;
+import org.snomed.snowstorm.core.data.repositories.ReferenceSetTypeRepository;
 import org.snomed.snowstorm.core.data.services.identifier.IdentifierService;
 import org.snomed.snowstorm.core.data.services.pojo.AsyncRefsetMemberChangeBatch;
 import org.snomed.snowstorm.core.data.services.pojo.MemberSearchRequest;
@@ -42,12 +44,12 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.elasticsearch.client.elc.NativeQuery;
-import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
+import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.core.context.SecurityContext;
@@ -61,10 +63,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
-import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
-import static io.kaicode.elasticvc.helper.QueryHelper.*;
 import static java.lang.Long.parseLong;
+import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.*;
+import static io.kaicode.elasticvc.helper.QueryHelper.*;
 import static org.snomed.snowstorm.core.data.domain.Concepts.inactivationAndAssociationRefsets;
+import static org.snomed.snowstorm.core.data.services.CodeSystemService.MAIN;
 import static org.snomed.snowstorm.core.util.CollectionUtils.orEmpty;
 import static org.snomed.snowstorm.core.util.SearchAfterQueryHelper.updateQueryWithSearchAfter;
 import static org.springframework.data.elasticsearch.client.elc.Queries.wildcardQuery;
@@ -94,10 +97,16 @@ public class ReferenceSetMemberService extends ComponentService {
 	private BranchService branchService;
 
 	@Autowired
+	private SBranchService sBranchService;
+
+	@Autowired
 	private BranchMetadataHelper branchMetadataHelper;
 
 	@Autowired
 	private ReferenceSetMemberRepository memberRepository;
+
+	@Autowired
+	private ReferenceSetTypeRepository typeRepository;
 
 	@Autowired
 	private ReferenceSetTypesConfigurationService referenceSetTypesConfigurationService;
@@ -121,9 +130,8 @@ public class ReferenceSetMemberService extends ComponentService {
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
 	public void init() {
-		List<ReferenceSetTypeExportConfiguration> configuredTypes = referenceSetTypesConfigurationService.getConfiguredTypes();
-		String message = String.format("Reference set types configured for export: %s", configuredTypes.toString());
-		logger.info(message);
+		Set<ReferenceSetType> configuredTypes = referenceSetTypesConfigurationService.getConfiguredTypes();
+		setupTypes(configuredTypes);
 	}
 
 	public Page<ReferenceSetMember> findMembers(String branch,
@@ -329,9 +337,9 @@ public class ReferenceSetMemberService extends ComponentService {
 				.build();
 		List<ReferenceSetMember> matches = elasticsearchOperations.search(query, ReferenceSetMember.class).stream().map(SearchHit::getContent).collect(Collectors.toList());
 		if (matches.size() != uuids.size()) {
-			List<String> matchedIds = matches.stream().map(ReferenceSetMember::getMemberId).toList();
+			List<String> matchedIds = matches.stream().map(ReferenceSetMember::getMemberId).collect(Collectors.toList());
 			Set<String> missingIds = new HashSet<>(uuids);
-			matchedIds.forEach(missingIds::remove);
+			missingIds.removeAll(matchedIds);
 			throw new NotFoundException(String.format("%s reference set members not found on branch %s: %s", missingIds.size(), branch, missingIds));
 		}
 
@@ -460,7 +468,7 @@ public class ReferenceSetMemberService extends ComponentService {
 						.withQuery(bool(b -> b
 								.must(termsQuery(Description.Fields.DESCRIPTION_ID, descriptionIdsSegment))
 								.must(versionControlHelper.getBranchCriteriaIncludingOpenCommit(commit).getEntityBranchCriteria(Description.class))))
-						.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.CONCEPT_ID, Description.Fields.DESCRIPTION_ID}, null))
+						.withSourceFilter(new FetchSourceFilter(true, new String[]{Description.Fields.CONCEPT_ID, Description.Fields.DESCRIPTION_ID}, null))
 						.withPageable(LARGE_PAGE);
 				try (final SearchHitsIterator<Description> descriptions = elasticsearchOperations.searchForStream(queryBuilder.build(), Description.class)) {
 					descriptions.forEachRemaining(description ->
@@ -478,14 +486,8 @@ public class ReferenceSetMemberService extends ComponentService {
 				member.setConceptId(description.getConceptId());
 			});
 		}
-		// Having to filter out null members when loading the IPS Terminology.
-		// In the content there are many lang refset members referring to non-existent descriptions.
-		// The filter is needed, but I don't quite understand why.
-		List<ReferenceSetMember> notNullMembers = members.stream().filter(Objects::nonNull).toList();
-		if (notNullMembers.isEmpty()) {
-			return Collections.emptyList();
-		}
-		return doSaveBatchComponents(notNullMembers, commit, ReferenceSetMember.Fields.MEMBER_ID, memberRepository);
+
+		return doSaveBatchComponents(members, commit, ReferenceSetMember.Fields.MEMBER_ID, memberRepository);
 	}
 
 	public SearchAfterPage<ReferenceSetMember> findMembersForECLResponse(BoolQuery.Builder memberQueryBuilder, List<MemberFilterConstraint> memberFilterConstraints,
@@ -508,7 +510,7 @@ public class ReferenceSetMemberService extends ComponentService {
 			}
 			String[] fieldsToInclude = new String[elasticFieldNames.size()];
 			elasticFieldNames.toArray(fieldsToInclude);
-			queryBuilder.withSourceFilter(new FetchSourceFilter(fieldsToInclude, null));
+			queryBuilder.withSourceFilter(new FetchSourceFilter(true, fieldsToInclude, null));
 		}
 
 		NativeQuery query = queryBuilder.build();
@@ -536,7 +538,7 @@ public class ReferenceSetMemberService extends ComponentService {
 		// Build search query
 		NativeQuery query = new NativeQueryBuilder()
 				.withQuery(memberQueryBuilder.build()._toQuery())
-				.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(true, new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
 				.withSort(SortOptions.of(s -> s.field(f -> f.field("_doc"))))// Fastest unordered sort
 				.withPageable(LARGE_PAGE)
 				.build();
@@ -603,6 +605,48 @@ public class ReferenceSetMemberService extends ComponentService {
 				}
 			}
 		}
+	}
+
+	private void setupTypes(Set<ReferenceSetType> referenceSetTypes) {
+		String path = refsetsBranchPath;
+		if (!branchService.exists(MAIN)) {
+			sBranchService.create(MAIN);
+		}
+		if (branchService.findLatest(path).isLocked()) {
+			logger.warn("{} branch is locked. Unable to verify reference set type configuration.", path);
+			return;
+		}
+		logger.info("Reference set types are configured against branch: '{}'.", path);
+		List<ReferenceSetType> existingTypes = findConfiguredReferenceSetTypes(path);
+		Set<ReferenceSetType> typesToRemove = new HashSet<>(existingTypes);
+		typesToRemove.removeAll(referenceSetTypes);
+		if (!typesToRemove.isEmpty()) {
+			String message = String.format("Removing reference set types: %s", typesToRemove);
+			logger.info(message);
+			try (Commit commit = branchService.openCommit(path, branchMetadataHelper.getBranchLockMetadata(message))) {
+				typesToRemove.forEach(ReferenceSetType::markDeleted);
+				doSaveBatchComponents(typesToRemove, commit, ReferenceSetType.FIELD_ID, typeRepository);
+				commit.markSuccessful();
+			}
+		}
+
+		Set<ReferenceSetType> typesToAdd = new HashSet<>(referenceSetTypes);
+		typesToAdd.removeAll(existingTypes);
+		if (!typesToAdd.isEmpty()) {
+			String message = String.format("Setting up reference set types: %s", typesToAdd.toString());
+			logger.info(message);
+			try (Commit commit = branchService.openCommit(path, branchMetadataHelper.getBranchLockMetadata(message))) {
+				doSaveBatchComponents(typesToAdd, commit, ReferenceSetType.FIELD_ID, typeRepository);
+				commit.markSuccessful();
+			}
+		}
+	}
+
+	public List<ReferenceSetType> findConfiguredReferenceSetTypes(String path) {
+		NativeQuery query = new NativeQueryBuilder()
+				.withQuery(versionControlHelper.getBranchCriteria(path).getEntityBranchCriteria(ReferenceSetType.class))
+				.withPageable(LARGE_PAGE).build();
+		return elasticsearchOperations.search(query, ReferenceSetType.class).stream().map(SearchHit::getContent).collect(Collectors.toList());
 	}
 
 	public ReferenceSetMember updateMember(String branch, ReferenceSetMember member) {
@@ -692,8 +736,7 @@ public class ReferenceSetMemberService extends ComponentService {
 		return refsetToTypeMap;
 	}
 
-	public Map<String, ReferenceSetTypeExportConfiguration> getConfiguredTypesMap() {
-		return referenceSetTypesConfigurationService.getConfiguredTypes().stream()
-				.collect(Collectors.toMap(ReferenceSetTypeExportConfiguration::getConceptId, Function.identity()));
+	public Map<String, ReferenceSetType> getConfiguredTypesMap() {
+		return referenceSetTypesConfigurationService.getConfiguredTypes().stream().collect(Collectors.toMap(ReferenceSetType::getConceptId, Function.identity()));
 	}
 }

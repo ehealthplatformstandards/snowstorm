@@ -73,6 +73,21 @@ public class ReferenceSetMember extends SnomedComponent<ReferenceSetMember> impl
 		String TRANSIENT_EXPRESSION_TERM = "transientExpressionTerm";
 	}
 
+	public interface MDRSFields {
+		String SOURCE_EFFECTIVE_TIME = "sourceEffectiveTime";
+		String TARGET_EFFECTIVE_TIME = "targetEffectiveTime";
+	}
+
+	public interface DescriptorFields {
+		String ATTRIBUTE_DESCRIPTION = "attributeDescription";
+		String ATTRIBUTE_TYPE = "attributeType";
+		String ATTRIBUTE_ORDER = "attributeOrder";
+	}
+
+	public interface QueryFields {
+		String QUERY = "query";
+	}
+
 	@JsonView(value = View.Component.class)
 	@Field(type = FieldType.Keyword)
 	private String memberId;

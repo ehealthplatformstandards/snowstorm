@@ -9,7 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.fhir.repositories.FHIRValueSetRepository;
+import org.snomed.snowstorm.validation.DroolsValidationService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -20,6 +22,7 @@ import java.io.InputStream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+@MockBean(DroolsValidationService.class)
 class FHIRValueSetProviderScrudTest extends AbstractFHIRTest {
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());

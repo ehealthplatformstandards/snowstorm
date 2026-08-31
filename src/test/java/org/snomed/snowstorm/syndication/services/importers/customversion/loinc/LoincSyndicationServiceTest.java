@@ -1,11 +1,13 @@
 package org.snomed.snowstorm.syndication.services.importers.customversion.loinc;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.MockedConstruction;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.snomed.snowstorm.core.rf2.rf2import.ImportJob;
 import org.snomed.snowstorm.syndication.utils.FileUtils;
@@ -16,8 +18,6 @@ import org.snomed.snowstorm.syndication.constants.SyndicationTerminology;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 import java.util.Optional;
 
 import static org.apache.commons.compress.java.util.jar.Pack200.Packer.LATEST;
@@ -36,22 +36,39 @@ class LoincSyndicationServiceTest {
     @InjectMocks
     private LoincSyndicationService loincSyndicationService;
 
+    @Mock
+    private Process process;
+
+    private MockedConstruction<ProcessBuilder> processBuilderMock;
+
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() {
         ReflectionTestUtils.setField(loincSyndicationService, "workingDirectory", "/tmp");
         ReflectionTestUtils.setField(loincSyndicationService, "fileNamePattern", "loinc.zip");
-        createFakeHapiFhirCli();
+        processBuilderMock = mockConstruction(ProcessBuilder.class, (mock, context) -> {
+            when(mock.directory(any())).thenReturn(mock);
+            when(mock.start()).thenReturn(process);
+        });
+    }
+
+    @AfterEach
+    void tearDown() {
+        processBuilderMock.close();
     }
 
     @Test
     void testImportLoincTerminology_FileAlreadyExists() {
-        try (var mockStatic = mockStatic(FileUtils.class)) {
-            mockStatic.when(() -> FileUtils.findFile("/tmp", "loinc.zip"))
+        try (
+                var mockFileUtils = mockStatic(FileUtils.class);
+                var mockCommandUtils = mockStatic(CommandUtils.class)
+        ) {
+            mockFileUtils.when(() -> FileUtils.findFile("/tmp", "loinc.zip"))
                     .thenReturn(Optional.of(new File("loinc.zip")));
 
             loincSyndicationService.fetchAndImportTerminology(new SyndicationImportParams(SyndicationTerminology.LOINC, LOCAL_VERSION, null));
 
-            mockStatic.verify(() -> FileUtils.findFile("/tmp", "loinc.zip"), times(1));
+            mockFileUtils.verify(() -> FileUtils.findFile("/tmp", "loinc.zip"), times(1));
+            mockCommandUtils.verify(() -> CommandUtils.waitForProcessTermination(process, "Import LOINC terminology"));
         }
     }
 
@@ -97,13 +114,4 @@ class LoincSyndicationServiceTest {
         }
     }
 
-    private void createFakeHapiFhirCli() throws IOException {
-        File script = new File("/tmp/hapi-fhir-cli");
-        try (FileWriter writer = new FileWriter(script)) {
-            writer.write("#!/bin/bash\n");
-            writer.write("echo 'HAPI FHIR CLI Simulation'\n");
-            writer.write("exit 0\n");
-        }
-        script.setExecutable(true);
-    }
 }

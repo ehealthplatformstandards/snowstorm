@@ -32,33 +32,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Build and run Maven tests
-        run: mvn --batch-mode --no-transfer-progress clean package -Ddependency-check.skip=true
-
-      - name: List the contents of the target directory
-        run: ls -la target
-
-      - name: Check Node version
-        run: node -v && npm -v
-
-      - name: Login to Docker Hub
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-        run: |
-          echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin > /dev/null 2>&1
-
-      - name: Build Docker image
-        run: |
-          CURRENT_DATE=$(date +'%Y%m%d')
-          BUILD_NUMBER=${GITHUB_RUN_NUMBER}
-          IMAGE_TAG="ehealthplatformstandards/snowstorm:${CURRENT_DATE}-${BUILD_NUMBER}"
-          docker build -t "$IMAGE_TAG" .
-          docker tag "$IMAGE_TAG" ehealthplatformstandards/snowstorm:latest
-          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
-          docker images
-
-      - name: Push Docker image
-        run: |
-          docker push "$IMAGE_TAG"
-          docker push ehealthplatformstandards/snowstorm:latest
+      - name: Run Maven tests
+        run: mvn --batch-mode --no-transfer-progress clean test -Ddependency-check.skip=true

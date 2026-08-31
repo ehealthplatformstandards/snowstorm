@@ -1,12 +1,13 @@
 package org.snomed.snowstorm.core.data.services;
 
-import co.elastic.clients.elasticsearch._types.*;
+import co.elastic.clients.elasticsearch._types.SortOptions;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import com.google.common.collect.Iterables;
 import io.kaicode.elasticvc.api.BranchCriteria;
 import io.kaicode.elasticvc.api.VersionControlHelper;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.core.data.domain.*;
@@ -49,7 +50,6 @@ import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.*;
 import static io.kaicode.elasticvc.helper.QueryHelper.*;
 import static org.snomed.snowstorm.config.Config.DEFAULT_LANGUAGE_DIALECTS;
 import static org.snomed.snowstorm.core.util.SearchAfterQueryHelper.updateQueryWithSearchAfter;
-import static org.snomed.snowstorm.core.util.CollectionUtils.orEmpty;
 import static org.snomed.snowstorm.ecl.ConceptSelectorHelper.CONCEPT_ID_SEARCH_AFTER_EXTRACTOR;
 import static org.snomed.snowstorm.ecl.ConceptSelectorHelper.getDefaultSortForConcept;
 
@@ -212,7 +212,7 @@ public class QueryService implements ApplicationContextAware {
 				pageRequest = updatePageRequestSort(pageRequest, Sort.sort(Concept.class).by(Concept::getConceptId).descending());
 				NativeQuery query = new NativeQueryBuilder()
 						.withQuery(conceptBoolQuery)
-						.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+						.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 						.withPageable(pageRequest)
 						.build();
 				query.setTrackTotalHits(true);
@@ -250,7 +250,7 @@ public class QueryService implements ApplicationContextAware {
 				try (SearchHitsIterator<Concept> stream = elasticsearchOperations.searchForStream(new NativeQueryBuilder()
 						.withQuery(conceptBoolQuery)
 						.withFilter(termsQuery(Concept.Fields.CONCEPT_ID, allConceptIdsSortedByTermOrder))
-						.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+						.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 						.withPageable(LARGE_PAGE)
 						.build(), Concept.class)) {
 					stream.forEachRemaining(hit -> allFilteredLogicalMatches.add(hit.getContent().getConceptIdAsLong()));
@@ -319,7 +319,7 @@ public class QueryService implements ApplicationContextAware {
 							.must(branchCriteria.getEntityBranchCriteria(Concept.class))
 							.must(conceptClauses.build()._toQuery())))
 					.withFilter(termsQuery(Concept.Fields.CONCEPT_ID, batch))
-					.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 					.withSort(getDefaultSortForConcept())
 					.withPageable(LARGE_PAGE);
 
@@ -358,7 +358,7 @@ public class QueryService implements ApplicationContextAware {
 	}
 
 	public Set<Long> findAncestorIds(String conceptId, String path, boolean stated) {
-		return findAncestorIds(versionControlHelper.getBranchCriteria(path), stated, conceptId);
+		return findAncestorIds(versionControlHelper.getBranchCriteria(path), path, stated, conceptId);
 	}
 
 	public Set<Long> findParentIds(BranchCriteria branchCriteria, boolean stated, Collection<Long> conceptIds) {
@@ -375,7 +375,7 @@ public class QueryService implements ApplicationContextAware {
 		return concepts.isEmpty() ? Collections.emptySet() : concepts.stream().flatMap(queryConcept -> queryConcept.getParents().stream()).collect(Collectors.toSet());
 	}
 
-	public Set<Long> findAncestorIds(BranchCriteria branchCriteria, boolean stated, String conceptId) {
+	public Set<Long> findAncestorIds(BranchCriteria branchCriteria, String path, boolean stated, String conceptId) {
 		final NativeQuery searchQuery = new NativeQueryBuilder()
 				.withQuery(bool(b -> b
 						.must(branchCriteria.getEntityBranchCriteria(QueryConcept.class))
@@ -388,7 +388,7 @@ public class QueryService implements ApplicationContextAware {
 				.stream().map(SearchHit::getContent).collect(Collectors.toList());
 		if (concepts.size() > 1) {
 			logger.error("More than one index concept found {}", concepts);
-			throw new IllegalStateException("More than one query-index-concept found for id " + conceptId + " on branch " + branchCriteria.getBranchPath() + ".");
+			throw new IllegalStateException("More than one query-index-concept found for id " + conceptId + " on branch " + path + ".");
 		}
 		return !concepts.isEmpty() ? concepts.get(0).getAncestors() : Collections.emptySet();
 	}
@@ -402,13 +402,14 @@ public class QueryService implements ApplicationContextAware {
 				)
 				.withPageable(LARGE_PAGE)
 				.build();
-		final List<QueryConcept> concepts = elasticsearchOperations.search(searchQuery, QueryConcept.class)
-				.stream().map(SearchHit::getContent).toList();
-		Set<Long> allAncestors = new HashSet<>();
-		for (QueryConcept concept : concepts) {
-			allAncestors.addAll(concept.getAncestors());
+		try (SearchHitsIterator<QueryConcept> stream = elasticsearchOperations.searchForStream(searchQuery, QueryConcept.class)) {
+			final List<QueryConcept> concepts = stream.stream().map(SearchHit::getContent).toList();
+			Set<Long> allAncestors = new HashSet<>();
+			for (QueryConcept concept : concepts) {
+				allAncestors.addAll(concept.getAncestors());
+			}
+			return allAncestors;
 		}
-		return allAncestors;
 	}
 
 	public Set<Long> findParentIdsAsUnion(BranchCriteria branchCriteria, boolean stated, Collection<Long> conceptId) {
@@ -436,7 +437,7 @@ public class QueryService implements ApplicationContextAware {
 						.must(termsQuery(QueryConcept.Fields.ANCESTORS, conceptIds))
 						.must(termQuery(QueryConcept.Fields.STATED, stated)))
 				)
-				.withSourceFilter(new FetchSourceFilter(new String[]{QueryConcept.Fields.CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{QueryConcept.Fields.CONCEPT_ID}, null))
 				.withPageable(LARGE_PAGE)
 				.withSort(SortOptions.of(sb -> sb.field(fs -> fs.field(QueryConcept.Fields.CONCEPT_ID))))// This could be anything
 				.build();
@@ -451,7 +452,7 @@ public class QueryService implements ApplicationContextAware {
 						.must(termsQuery(QueryConcept.Fields.PARENTS, conceptIds))
 						.must(termQuery(QueryConcept.Fields.STATED, stated)))
 				)
-				.withSourceFilter(new FetchSourceFilter(new String[]{QueryConcept.Fields.CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{QueryConcept.Fields.CONCEPT_ID}, null))
 				.withPageable(LARGE_PAGE)
 				.withSort(SortOptions.of(sb -> sb.field(fs -> fs.field(QueryConcept.Fields.CONCEPT_ID))))// This could be anything
 				.build();
@@ -471,86 +472,6 @@ public class QueryService implements ApplicationContextAware {
 
 	public ConceptQueryBuilder createQueryBuilder(Relationship.CharacteristicType form) {
 		return new ConceptQueryBuilder(form == Relationship.CharacteristicType.stated);
-	}
-
-	public String findConceptWithMatchingInferredRelationships(Set<Relationship> relationships, BranchCriteria branchCriteria) {
-
-		// Create relationship summary for semantic index query
-		Map<String, Set<String>> relationshipSummary = new HashMap<>();
-		for (Relationship relationship : relationships) {
-			relationshipSummary.computeIfAbsent(relationship.getTypeId(), i -> new HashSet<>()).add(relationship.getDestinationId());
-		}
-		Set<String> parents = relationshipSummary.remove(Concepts.ISA);
-		// Semantic index query
-		Query query = bool(builder -> {
-					builder.must(branchCriteria.getEntityBranchCriteria(QueryConcept.class))
-							.must(termQuery(QueryConcept.Fields.STATED, false));
-					for (String parent : parents) {
-						builder.must(termQuery(QueryConcept.Fields.PARENTS, parent));
-					}
-					for (Map.Entry<String, Set<String>> entry : relationshipSummary.entrySet()) {
-						for (String value : entry.getValue()) {
-							builder.must(termQuery(QueryConcept.Fields.getAttributePath(entry.getKey()), value));
-						}
-					}
-					return builder;
-				}
-		);
-
-		final NativeQuery searchQuery = new NativeQueryBuilder()
-				.withQuery(query)
-				.withPageable(PageRequest.of(0, 1))
-				// Shortest matching concept model first
-				.withSort(SortOptions.of(s -> s.script(ScriptSort.of(b -> b.type(ScriptSortType.Number)
-						.script(sb -> sb.inline(InlineScript.of(is -> is.source("doc['attrMap'].value.length()"))))
-						.order(SortOrder.Asc)))))
-				.build();
-		SearchHits<QueryConcept> searchHits = elasticsearchOperations.search(searchQuery, QueryConcept.class);
-
-		if (searchHits.hasSearchHits()) {
-			QueryConcept semanticIndexConcept = searchHits.getSearchHit(0).getContent();
-			if (isModelMatchingIndex(relationships, semanticIndexConcept)) {
-				return semanticIndexConcept.getConceptIdL().toString();
-			}
-		}
-
-		return null;
-	}
-
-	private boolean isModelMatchingIndex(Set<Relationship> relationships, QueryConcept semanticIndexConcept) {
-		// Create relationship detail for subsequent results checking
-		Map<Integer, Map<String, Set<String>>> relationshipDetail = new HashMap<>();
-		for (Relationship relationship : relationships) {
-			relationshipDetail.computeIfAbsent(relationship.getGroupId(), i -> new HashMap<>())
-					.computeIfAbsent(relationship.getTypeId(), i -> new HashSet<>()).add(relationship.getDestinationId());
-		}
-		Set<String> indexParents = orEmpty(semanticIndexConcept.getParents()).stream().map(Object::toString).collect(Collectors.toSet());
-		if (relationshipDetail.containsKey(0) && orEmpty(relationshipDetail.get(0).remove(Concepts.ISA)).equals(indexParents)) {
-			// Parents match
-			// Check attributes and groups. Need to convert everything to unordered sets. Group numbers above 0 may be different so just use a set of maps.
-
-			Map<String, Set<String>> relationshipsUngroupedA = relationshipDetail.remove(0);
-			Set<Map<String, Set<String>>> relationshipsGroupedA = new HashSet<>(relationshipDetail.values());
-
-			// Make unordered sets of index relationships
-			Map<String, Set<String>> relationshipsUngroupedB = new HashMap<>();
-			Set<Map<String, Set<String>>> relationshipsGroupedB = new HashSet<>();
-			for (Map.Entry<Integer, Map<String, List<Object>>> indexMap : semanticIndexConcept.getGroupedAttributesMap().entrySet()) {
-				Map<String, Set<String>> targetMap = new HashMap<>();
-				for (Map.Entry<String, List<Object>> attributes : indexMap.getValue().entrySet()) {
-					targetMap.put(attributes.getKey(), attributes.getValue().stream().map(Object::toString).collect(Collectors.toSet()));
-				}
-				if (indexMap.getKey() == 0) {
-					relationshipsUngroupedB = targetMap;
-				} else {
-					relationshipsGroupedB.add(targetMap);
-				}
-			}
-
-			return relationshipsUngroupedA.equals(relationshipsUngroupedB) && relationshipsGroupedA.equals(relationshipsGroupedB);
-		}
-
-		return false;
 	}
 
 	public void joinIsLeafFlag(List<ConceptMini> concepts, Relationship.CharacteristicType form, BranchCriteria branchCriteria, String branch) throws ServiceException {

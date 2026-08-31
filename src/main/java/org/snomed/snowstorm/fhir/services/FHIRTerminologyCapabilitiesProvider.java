@@ -5,14 +5,9 @@ import ca.uhn.fhir.rest.api.server.RequestDetails;
 import ca.uhn.fhir.rest.server.RestfulServer;
 import ca.uhn.fhir.rest.server.provider.ServerCapabilityStatementProvider;
 import jakarta.servlet.http.HttpServletRequest;
-import org.apache.jena.sys.JenaSystem;
 import org.hl7.fhir.instance.model.api.IBaseConformance;
 import org.hl7.fhir.r4.model.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.info.BuildProperties;
-import org.springframework.web.context.WebApplicationContext;
-import org.springframework.web.context.support.WebApplicationContextUtils;
 
 import java.util.Arrays;
 import java.util.Date;
@@ -24,7 +19,6 @@ import java.util.Date;
  * See https://github.com/jamesagnew/hapi-fhir/issues/1681
  */
 public class FHIRTerminologyCapabilitiesProvider extends ServerCapabilityStatementProvider {
-	private final Logger logger = LoggerFactory.getLogger(getClass());
 
 	private final BuildProperties buildProperties;
 	private final FHIRCodeSystemService codeSystemService;
@@ -37,15 +31,15 @@ public class FHIRTerminologyCapabilitiesProvider extends ServerCapabilityStateme
 
 	@Metadata(cacheMillis = 0)
 	public IBaseConformance getMetadataResource(HttpServletRequest request, RequestDetails requestDetails) {
-		logger.info(requestDetails.getCompleteUrl());
-		final WebApplicationContext applicationContext =
-				WebApplicationContextUtils.getWebApplicationContext(request.getServletContext());
 		if ("terminology".equals(request.getParameter("mode"))) {
 			FHIRTerminologyCapabilities tc = new FHIRTerminologyCapabilities().withDefaults(this.buildProperties,this.codeSystemService);
-			tc.setVersion(buildProperties.getVersion());
-			tc.setDate(new Date(buildProperties.getTime().toEpochMilli()));
+			if (buildProperties != null) {
+				tc.setVersion(buildProperties.getVersion());
+				tc.setDate(new Date(buildProperties.getTime().toEpochMilli()));
+			}
 			TerminologyCapabilities.TerminologyCapabilitiesExpansionComponent expansion = new TerminologyCapabilities.TerminologyCapabilitiesExpansionComponent();
 			Arrays.asList("activeOnly",
+			"check-system-version",
 			"count",
 			"displayLanguage",
 			"excludeNested",
@@ -59,7 +53,6 @@ public class FHIRTerminologyCapabilitiesProvider extends ServerCapabilityStateme
 			tc.setExpansion(expansion);
 			return tc;
 		} else {
-			JenaSystem.init();
 			IBaseConformance resource = super.getServerConformance(request, requestDetails);
 			CapabilityStatement cs = (CapabilityStatement) resource;
 			Extension testsVersion = new Extension("http://hl7.org/fhir/uv/application-feature/StructureDefinition/feature");
@@ -75,9 +68,11 @@ public class FHIRTerminologyCapabilitiesProvider extends ServerCapabilityStateme
 			operation.setName("versions");
 			operation.setDefinition(requestDetails.getFhirServerBase()+"/versions");
 			cs.getRest().stream().filter(x->x.getMode()== CapabilityStatement.RestfulCapabilityMode.SERVER).findFirst().ifPresent(x -> x.addOperation(operation));
-			cs.getSoftware().setReleaseDate(new Date(buildProperties.getTime().toEpochMilli()));
-			cs.setVersion(buildProperties.getVersion());
-			cs.setTitle(buildProperties.getName());
+			if (buildProperties != null) {
+				cs.getSoftware().setReleaseDate(new Date(buildProperties.getTime().toEpochMilli()));
+				cs.setVersion(buildProperties.getVersion());
+				cs.setTitle(buildProperties.getName());
+			}
 			return cs;
 		}
 	}

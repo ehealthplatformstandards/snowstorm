@@ -4,8 +4,6 @@ import org.hl7.fhir.r4.model.Parameters;
 import org.hl7.fhir.r4.model.ValueSet;
 import org.junit.jupiter.api.Test;
 import org.snomed.snowstorm.core.data.domain.Concepts;
-import org.snomed.snowstorm.validation.DroolsValidationService;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 
@@ -15,7 +13,6 @@ import static java.lang.String.format;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.snomed.snowstorm.fhir.config.FHIRConstants.SNOMED_URI;
 
-@MockBean(DroolsValidationService.class)
 class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 
 	@Test
@@ -120,13 +117,13 @@ class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 						"&systemVersion=http://snomed.info/sct/1234000008",
 				false);
 
-		// The deprecated "system-version" alias is still supported.
+		// Using "system-version" param (canonical form, sets the default version for versionless includes)
 		validateCode(baseUrl + "/ValueSet/$validate-code?" +
 						"url=http://snomed.info/sct?fhir_vs" +
 						"&system=" + SNOMED_URI +
 						"&code=138875005" +
 						"&system-version=http://snomed.info/sct/900000000000207008",
-				true, "{\"name\":\"version\",\"valueString\":\"http://snomed.info/sct/900000000000207008/version/20190131\"}");
+				true, null);
 
 		// Code "systemVersion" version matches the resolved value set version
 		validateCode(baseUrl + "/ValueSet/$validate-code?" +
@@ -175,7 +172,7 @@ class FHIRValueSetProviderValidateCodeEclTest extends AbstractFHIRTest {
 			String url = baseUrl + "/ValueSet/reason-for-encounter/$expand";
 			ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
 			ValueSet savedVS = fhirJsonParser.parseResource(ValueSet.class, response.getBody());
-			assertEquals(14, savedVS.getExpansion().getTotal(), () -> "Body: " + response.getBody());
+			assertEquals(16, savedVS.getExpansion().getTotal(), () -> "Body: " + response.getBody());
 		} finally {
 			deleteVs("reason-for-encounter");
 		}

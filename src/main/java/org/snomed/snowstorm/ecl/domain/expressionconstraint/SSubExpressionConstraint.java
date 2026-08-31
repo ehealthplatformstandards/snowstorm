@@ -6,6 +6,8 @@ import io.kaicode.elasticvc.api.BranchCriteria;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.snomed.langauges.ecl.domain.ConceptReference;
 import org.snomed.langauges.ecl.domain.expressionconstraint.ExpressionConstraint;
 import org.snomed.langauges.ecl.domain.expressionconstraint.SubExpressionConstraint;
@@ -13,6 +15,7 @@ import org.snomed.langauges.ecl.domain.filter.*;
 import org.snomed.langauges.ecl.domain.refinement.Operator;
 import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.domain.QueryConcept;
+import org.snomed.snowstorm.core.data.domain.ReferencedConceptsLookup;
 import org.snomed.snowstorm.ecl.ConceptSelectorHelper;
 import org.snomed.snowstorm.ecl.ECLContentService;
 import org.snomed.snowstorm.ecl.deserializer.ECLModelDeserializer;
@@ -34,14 +37,19 @@ import static org.snomed.snowstorm.core.util.CollectionUtils.orEmpty;
 
 public class SSubExpressionConstraint extends SubExpressionConstraint implements SExpressionConstraint {
 
+	private final Logger logger = LoggerFactory.getLogger(SSubExpressionConstraint.class);
+
+	private int maxTermsCount;
+
 	@SuppressWarnings("unused")
 	// For JSON
 	private SSubExpressionConstraint() {
-		this(null);
+		super(null);
 	}
 
-	public SSubExpressionConstraint(Operator operator) {
+	public SSubExpressionConstraint(Operator operator, int maxTermsCount) {
 		super(operator);
+		this.maxTermsCount = maxTermsCount;
 	}
 
 	@Override
@@ -151,8 +159,8 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 				conceptIds.add(conceptReference.getConceptId());
 			}
 			SubExpressionConstraint subExpressionConstraint = fieldFilter.getSubExpressionConstraint();
-			if (subExpressionConstraint instanceof SSubExpressionConstraint) {
-				conceptIds.addAll(((SSubExpressionConstraint) subExpressionConstraint).getConceptIds());
+			if (subExpressionConstraint instanceof SSubExpressionConstraint sSubExpressionConstraint) {
+				conceptIds.addAll(sSubExpressionConstraint.getConceptIds());
 			}
 		}
 	}
@@ -163,7 +171,7 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 	}
 
 	private SSubExpressionConstraint cloneWithoutFiltersOrSupplements() {
-		SSubExpressionConstraint clone = new SSubExpressionConstraint(operator);
+		SSubExpressionConstraint clone = new SSubExpressionConstraint(operator, maxTermsCount);
 		clone.setConceptId(conceptId);
 		clone.setTerm(term);
 		clone.setWildcard(wildcard);
@@ -177,14 +185,11 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 	public void addCriteria(RefinementBuilder refinementBuilder, Consumer<List<Long>> filteredOrSupplementedContentCallback, boolean triedCache) {
 		BoolQuery.Builder query = refinementBuilder.getQueryBuilder();
 
-		if (operator == Operator.memberOf || isAnyFiltersOrSupplements() || isNestedExpressionConstraintMemberOfQuery()) {
+		if (shouldFetchConceptIds(refinementBuilder)) {
 			// Fetching required
-
 			ECLContentService eclContentService = refinementBuilder.getEclContentService();
 			BranchCriteria branchCriteria = refinementBuilder.getBranchCriteria();
 			boolean stated = refinementBuilder.isStated();
-
-			SortedSet<Long> conceptIdSortedSet;
 
 			// Cache results before applying filters, apart from member queries with field filters.
 			Collection<Long> prefetchedConceptIds = null;
@@ -192,7 +197,7 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 				// If there is a member filter constraint we can assume the results set will be fairly small / not reusable.
 				// If there are no filters this
 				// Fetch without cache.
-				prefetchedConceptIds = doAddCriteria(refinementBuilder, query);
+ 				prefetchedConceptIds = doAddCriteria(refinementBuilder, query);
 			}
 
 			if (prefetchedConceptIds == null) {
@@ -206,37 +211,44 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 					prefetchedConceptIds = eclContentService.fetchAllIdsWithCaching(sSubExpressionConstraint, branchCriteria, stated);
 				}
 			}
-			conceptIdSortedSet = new LongLinkedOpenHashSet(prefetchedConceptIds);
 
-			if (!conceptIdSortedSet.isEmpty()) {
-
-				// Apply filter constraints
-				if (getConceptFilterConstraints() != null) {
-					Set<Long> results = eclContentService.applyConceptFilters(getConceptFilterConstraints(), conceptIdSortedSet, branchCriteria, stated);
-					// Need to keep the original order
-					conceptIdSortedSet = new LongLinkedOpenHashSet(conceptIdSortedSet.stream().filter(results::contains).collect(Collectors.toList()));
-				}
-				if (getDescriptionFilterConstraints() != null) {
-					// For each filter constraint all sub-filters (term, language, etc) must apply.
-					// If multiple options are given within a sub-filter they are conjunction (OR).
-					for (DescriptionFilterConstraint descriptionFilter : getDescriptionFilterConstraints()) {
-						SortedMap<Long, Long> descriptionToConceptMap = eclContentService.applyDescriptionFilter(conceptIdSortedSet, descriptionFilter, branchCriteria, stated);
-						conceptIdSortedSet = new LongLinkedOpenHashSet(descriptionToConceptMap.values());
-					}
-				}
-
-				// Add history supplement
-				if (getHistorySupplement() != null) {
-					Set<Long> historicConcepts = eclContentService.findHistoricConcepts(conceptIdSortedSet, getHistorySupplement(), branchCriteria);
-					conceptIdSortedSet.addAll(historicConcepts);
-				}
-			}
-
+			SortedSet<Long> conceptIdSortedSet = new LongLinkedOpenHashSet(prefetchedConceptIds);
+			conceptIdSortedSet = applyFilters(conceptIdSortedSet, eclContentService, branchCriteria, stated);
 			query.must(termsQuery(QueryConcept.Fields.CONCEPT_ID, conceptIdSortedSet));
 			filteredOrSupplementedContentCallback.accept(new LongArrayList(conceptIdSortedSet));
 		} else {
 			doAddCriteria(refinementBuilder, query);
 		}
+	}
+
+	private boolean shouldFetchConceptIds(RefinementBuilder refinementBuilder) {
+		return isAnyFiltersOrSupplements() || ((operator == Operator.memberOf || isNestedExpressionConstraintMemberOfQuery()) &&
+				(refinementBuilder.shouldPrefetchMemberOfQueryResults() != null && refinementBuilder.shouldPrefetchMemberOfQueryResults()));
+	}
+
+	private SortedSet<Long> applyFilters(SortedSet<Long> conceptIdSortedSet, ECLContentService eclContentService, BranchCriteria branchCriteria, boolean stated) {
+		if (!conceptIdSortedSet.isEmpty()) {
+			// Apply filter constraints
+			if (getConceptFilterConstraints() != null) {
+				Set<Long> results = eclContentService.applyConceptFilters(getConceptFilterConstraints(), conceptIdSortedSet, branchCriteria, stated);
+				// Need to keep the original order
+				conceptIdSortedSet = new LongLinkedOpenHashSet(conceptIdSortedSet.stream().filter(results::contains).toList());
+			}
+			if (getDescriptionFilterConstraints() != null) {
+				// For each filter constraint all sub-filters (term, language, etc) must apply.
+				// If multiple options are given within a sub-filter they are conjunction (OR).
+				for (DescriptionFilterConstraint descriptionFilter : getDescriptionFilterConstraints()) {
+					SortedMap<Long, Long> descriptionToConceptMap = eclContentService.applyDescriptionFilter(conceptIdSortedSet, descriptionFilter, branchCriteria, stated);
+					conceptIdSortedSet = new LongLinkedOpenHashSet(descriptionToConceptMap.values());
+				}
+			}
+			// Add history supplement
+			if (getHistorySupplement() != null) {
+				Set<Long> historicConcepts = eclContentService.findHistoricConcepts(conceptIdSortedSet, getHistorySupplement(), branchCriteria);
+				conceptIdSortedSet.addAll(historicConcepts);
+			}
+		}
+		return conceptIdSortedSet;
 	}
 
 	/**
@@ -267,7 +279,13 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 			BoolQuery.Builder filterQueryBuilder = bool();
 			if (operator != null) {
 				SubRefinementBuilder filterRefinementBuilder = new SubRefinementBuilder(refinementBuilder, filterQueryBuilder);
+				filterRefinementBuilder.setShouldPrefetchMemberOfQueryResults(true);
 				Set<Long> results = applyConceptCriteriaWithOperator(conceptIds, operator, filterRefinementBuilder);
+				if (results != null && results.size() > maxTermsCount) {
+					String message = String.format("Your nested query %s matched too many results (%s) which exceeds the system limit of %s terms. Try narrowing your search.",
+							operator.getText() + ((SExpressionConstraint) nestedExpressionConstraint).toEclString(), results.size(), maxTermsCount);
+					throw new IllegalArgumentException(message);
+				}
 				queryBuilder.filter(filterQueryBuilder.build()._toQuery());
 				return results;
 			} else {
@@ -278,6 +296,7 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
 
 		} else if (operator == Operator.memberOf) {
 			// Member of wildcard (any reference set)
+			// Can't use concepts lookups here due to no reference set ids specified
 			Set<Long> conceptIdsInReferenceSet = refinementBuilder.getEclContentService()
 					.findConceptIdsInReferenceSet(null, getMemberFilterConstraints(), refinementBuilder);
 			queryBuilder.must(termsQuery(QueryConcept.Fields.CONCEPT_ID, conceptIdsInReferenceSet));
@@ -345,14 +364,68 @@ public class SSubExpressionConstraint extends SubExpressionConstraint implements
                     );
             case memberOf -> {
                 // ^
-                Set<Long> conceptIdsInReferenceSet = conceptSelector.findConceptIdsInReferenceSet(conceptIds, getMemberFilterConstraints(), refinementBuilder);
-                queryBuilder.filter(termsQuery(QueryConcept.Fields.CONCEPT_ID, conceptIdsInReferenceSet));
-                return conceptIdsInReferenceSet;
+				return handleMemberOf(conceptIds, refinementBuilder, queryBuilder, conceptSelector, branchCriteria);
             }
+			default ->  logger.warn("Unsupported operator: {}", operator);
         }
 		return null;
 	}
 
+
+	private Set<Long> handleMemberOf(Collection<Long> conceptIds, RefinementBuilder refinementBuilder, BoolQuery.Builder queryBuilder, ECLContentService conceptSelector, BranchCriteria branchCriteria) {
+		// Skip concepts lookup if disabled or use member filter constraints
+		if (!conceptSelector.isConceptsLookupEnabled() || hasMemberFilterConstraints()) {
+			return findReferencedConceptIds(conceptIds, refinementBuilder, queryBuilder, conceptSelector);
+		}
+		List<ReferencedConceptsLookup> lookups = conceptSelector.getConceptsLookups(branchCriteria, conceptIds);
+		Set<Long> refsetIdsWithLookup = lookups.stream().map(ReferencedConceptsLookup::getRefsetId).map(Long::parseLong).collect(Collectors.toSet());
+
+		if (conceptIds.size() == refsetIdsWithLookup.size()) {
+			return handleQueryWithFullLookup(conceptIds, refinementBuilder, queryBuilder, conceptSelector, branchCriteria);
+		} else {
+			return handleQueryWithPartialOrNoLookup(conceptIds, refsetIdsWithLookup, refinementBuilder, queryBuilder, conceptSelector, branchCriteria);
+		}
+	}
+
+	private boolean hasMemberFilterConstraints() {
+		return getMemberFilterConstraints() != null && !getMemberFilterConstraints().isEmpty();
+	}
+
+	private Set<Long> findReferencedConceptIds(Collection<Long> conceptIds, RefinementBuilder refinementBuilder, BoolQuery.Builder queryBuilder, ECLContentService conceptSelector) {
+		// Use member service instead of lookups
+		Set<Long> filteredIds = conceptSelector.findConceptIdsInReferenceSet(conceptIds, getMemberFilterConstraints(), refinementBuilder);
+		queryBuilder.filter(termsQuery(QueryConcept.Fields.CONCEPT_ID, filteredIds));
+		return filteredIds;
+	}
+
+	private Set<Long> handleQueryWithFullLookup(Collection<Long> conceptIds, RefinementBuilder refinementBuilder, BoolQuery.Builder queryBuilder, ECLContentService conceptSelector, BranchCriteria branchCriteria) {
+		if (Boolean.TRUE.equals(refinementBuilder.shouldPrefetchMemberOfQueryResults()) || conceptIds.size() > 1) {
+			Set<Long> conceptsFromLookup= conceptSelector.getConceptIdsFromLookup(branchCriteria, conceptIds);
+			queryBuilder.filter(termsQuery(QueryConcept.Fields.CONCEPT_ID, conceptsFromLookup));
+			return conceptsFromLookup;
+		} else {
+			queryBuilder.filter(conceptSelector.getTermsLookupFilterForMemberOfECL(branchCriteria, conceptIds.iterator().next()));
+			return null;
+		}
+	}
+
+	private Set<Long> handleQueryWithPartialOrNoLookup(Collection<Long> conceptIds, Set<Long> refsetIdsWithLookup, RefinementBuilder refinementBuilder, BoolQuery.Builder queryBuilder, ECLContentService conceptSelector, BranchCriteria branchCriteria) {
+		if (refsetIdsWithLookup.isEmpty()) {
+			// No Lookups found
+			return findReferencedConceptIds(conceptIds, refinementBuilder, queryBuilder, conceptSelector);
+		}
+		if (Boolean.TRUE.equals(refinementBuilder.shouldPrefetchMemberOfQueryResults())) {
+			Set<Long> results = new HashSet<>(conceptSelector.getConceptIdsFromLookup(branchCriteria, refsetIdsWithLookup));
+			List<Long> refsetIdsWithoutLookup = new ArrayList<>(conceptIds);
+			refsetIdsWithoutLookup.removeAll(refsetIdsWithLookup);
+			results.addAll(conceptSelector.findConceptIdsInReferenceSet(refsetIdsWithoutLookup, getMemberFilterConstraints(), refinementBuilder));
+			queryBuilder.filter(termsQuery(QueryConcept.Fields.CONCEPT_ID, results));
+			return results;
+		} else {
+			logger.info("Not all reference set ids have lookups, so use the member service to fetch referenced concepts instead");
+			return findReferencedConceptIds(conceptIds, refinementBuilder, queryBuilder, conceptSelector);
+		}
+	}
 	private Set<Long> retrieveAllAncestors(Collection<Long> conceptIds, BranchCriteria branchCriteria, boolean stated, ECLContentService eclContentService) {
 		return eclContentService.findAncestorIdsAsUnion(branchCriteria, stated, conceptIds);
 	}

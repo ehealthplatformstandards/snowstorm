@@ -1,6 +1,6 @@
 package org.snomed.snowstorm.core.data.services;
 
-import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery;
 import com.google.common.collect.Lists;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.CommitListener;
@@ -79,7 +79,7 @@ class SemanticIndexUpdateServiceTest extends AbstractTest {
 	@Test
 	void testCommitListenerOrderingConfig() {
 		List<CommitListener> commitListeners = branchService.getCommitListeners();
-		assertEquals(13, commitListeners.size());
+		assertEquals(16, commitListeners.size());
 		assertEquals(MRCMLoader.class, commitListeners.get(0).getClass());
 		assertEquals(ConceptDefinitionStatusUpdateService.class, commitListeners.get(1).getClass());
 		assertEquals(SemanticIndexUpdateService.class, commitListeners.get(2).getClass());
@@ -87,9 +87,11 @@ class SemanticIndexUpdateServiceTest extends AbstractTest {
 		assertEquals(BranchClassificationStatusService.class, commitListeners.get(4).getClass());
 		assertEquals(RefsetDescriptorUpdaterService.class, commitListeners.get(5).getClass());
 		assertEquals(IntegrityService.class, commitListeners.get(6).getClass());
-		assertEquals(MultiSearchService.class, commitListeners.get(7).getClass());
-		assertEquals(ECLPreprocessingService.class, commitListeners.get(8).getClass());
-		assertEquals(TraceabilityLogService.class, commitListeners.get(10).getClass());
+		assertEquals(ReferencedConceptsLookupUpdateService.class, commitListeners.get(7).getClass());
+		assertEquals(MultiSearchService.class, commitListeners.get(8).getClass());
+		assertEquals(ECLPreprocessingService.class, commitListeners.get(9).getClass());
+		assertEquals(AdditionalDependencyUpdateService.class, commitListeners.get(11).getClass());
+		assertEquals(TraceabilityLogService.class, commitListeners.get(12).getClass());
 	}
 
 	@Test
@@ -1308,7 +1310,7 @@ class SemanticIndexUpdateServiceTest extends AbstractTest {
 		// Assert
 		// No unnecessary semantic index changes are made.
 		SearchHits<QueryConcept> semanticChanges = elasticsearchOperations.search(new NativeQueryBuilder()
-				.withQuery(range().field("start").gte(JsonData.of(now.getTime())).build()._toQuery())
+				.withQuery(RangeQuery.of(r -> r.date(d -> d.field("start").gte(String.valueOf(now.getTime()))))._toQuery())
 				.build(), QueryConcept.class);
 		assertEquals(0, semanticChanges.getTotalHits());
 
@@ -1322,13 +1324,13 @@ class SemanticIndexUpdateServiceTest extends AbstractTest {
 
 		// When
 		// Version content
-		now = new Date();
+		Date now2 = new Date();
 		codeSystemService.createVersion(codeSystemService.find(CodeSystemService.SNOMEDCT), 20210201, "");
 
 		// Assert
 		// No unnecessary semantic index changes are made.
 		semanticChanges = elasticsearchOperations.search(new NativeQueryBuilder()
-				.withQuery(range().field("start").gte(JsonData.of(now.getTime())).build()._toQuery())
+				.withQuery(RangeQuery.of(r -> r.date(d -> d.field("start").gte(String.valueOf(now2.getTime()))))._toQuery())
 				.build(), QueryConcept.class);
 		assertEquals(0, semanticChanges.getTotalHits());
 	}

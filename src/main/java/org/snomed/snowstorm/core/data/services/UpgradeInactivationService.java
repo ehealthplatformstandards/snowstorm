@@ -58,13 +58,18 @@ public class UpgradeInactivationService {
 		}
 		String branchPath = codeSystem.getBranchPath();
 		logger.info("Start auto description inactivation for inactive concepts for code system {} on branch {}", codeSystem.getShortName(), branchPath);
+		if (!enabled(branchPath)) {
+			logger.info("Skipping auto description inactivation for inactive concepts for code system {} on branch {}", codeSystem.getShortName(), branchPath);
+			return;
+		}
+
 		BranchCriteria branchCriteria = versionControlHelper.getBranchCriteria(branchPath);
 		// find inactive concept ids
 		NativeQuery inactiveConceptQuery = new NativeQueryBuilder()
 				.withQuery(bool(b -> b
 						.must(branchCriteria.getEntityBranchCriteria(Concept.class))
 						.must(termQuery(SnomedComponent.Fields.ACTIVE, false))))
-				.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 				.withPageable(ComponentService.LARGE_PAGE)
 				.build();
 		List<Long> inactiveConceptIds = new LongArrayList();
@@ -90,7 +95,7 @@ public class UpgradeInactivationService {
 
 			NativeQuery descriptionsWithInactivationIndicators = new NativeQueryBuilder()
 					.withQuery(queryDescriptionsWithInactivationIndicators.build()._toQuery())
-					.withSourceFilter(new FetchSourceFilter(new String[]{REFERENCED_COMPONENT_ID}, null))
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{REFERENCED_COMPONENT_ID}, null))
 					.withPageable(ComponentService.LARGE_PAGE)
 					.build();
 
@@ -207,7 +212,7 @@ public class UpgradeInactivationService {
 						.must(termQuery(SnomedComponent.Fields.ACTIVE, true))
 						.must(termsQuery(Concept.Fields.CONCEPT_ID, conceptToAxiomsMap.keySet())))
 				)
-				.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 				.withPageable(ComponentService.LARGE_PAGE);
 		try (SearchHitsIterator<Concept> activeConcepts = elasticsearchOperations.searchForStream(activeConceptsQueryBuilder.build(), Concept.class)) {
 			activeConcepts.forEachRemaining(hit -> activeConceptIds.add(hit.getContent().getConceptIdAsLong()));
@@ -266,7 +271,7 @@ public class UpgradeInactivationService {
 				.withQuery(bool(b -> b
 						.must(branchCriteria.getEntityBranchCriteria(Description.class))))
 				.withFilter(termQuery(ACTIVE, false))
-				.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.DESCRIPTION_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Description.Fields.DESCRIPTION_ID}, null))
 				.withPageable(ComponentService.LARGE_PAGE);
 
 		try (final SearchHitsIterator<Description> inactiveDescriptions = elasticsearchOperations.searchForStream(searchQueryBuilder.build(), Description.class)) {
@@ -292,5 +297,28 @@ public class UpgradeInactivationService {
 		}
 
 		return expectedExtensionModules;
+	}
+
+	private boolean enabled(String branchPath) {
+		Branch branch = getBranchNullable(branchPath);
+		if (branch == null) {
+			return false;
+		}
+
+		Metadata metadata = branch.getMetadata();
+		if (metadata == null || metadata.size() == 0) {
+			return false;
+		}
+
+		String cncEnabled = metadata.containsKey(Config.CNC_ENABLED) ? metadata.getString(Config.CNC_ENABLED) : null;
+		return cncEnabled == null || "true".equalsIgnoreCase(cncEnabled);
+	}
+
+	private Branch getBranchNullable(String branchPath) {
+		try {
+			return branchService.findBranchOrThrow(branchPath, true);
+		} catch (Exception e) {
+			return null;
+		}
 	}
 }

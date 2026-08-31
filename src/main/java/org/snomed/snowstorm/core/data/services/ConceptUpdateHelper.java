@@ -6,9 +6,7 @@ import com.google.common.collect.Sets;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.ComponentService;
 import io.kaicode.elasticvc.api.VersionControlHelper;
-import io.kaicode.elasticvc.domain.Commit;
-import io.kaicode.elasticvc.domain.DomainEntity;
-import io.kaicode.elasticvc.domain.Metadata;
+import io.kaicode.elasticvc.domain.*;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +39,6 @@ import java.util.stream.Collectors;
 import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
 import static io.kaicode.elasticvc.helper.QueryHelper.termsQuery;
 import static org.snomed.snowstorm.core.data.domain.Concepts.CONCEPT_NON_CURRENT;
-import static org.snomed.snowstorm.core.data.domain.Concepts.inactivationIndicatorNames;
 
 @Service
 public class ConceptUpdateHelper extends ComponentService {
@@ -132,7 +129,8 @@ public class ConceptUpdateHelper extends ComponentService {
 		validateConcepts(newVersionConcepts);
 
 		// Grab branch metadata including values inherited from ancestor branches
-		Metadata metadata = branchService.findBranchOrThrow(commit.getBranch().getPath(), true).getMetadata();
+		Branch branch = branchService.findBranchOrThrow(commit.getBranch().getPath(), true);
+		Metadata metadata = branch.getMetadata();
 		String defaultModuleId = metadata.getString(Config.DEFAULT_MODULE_ID_KEY);
 		List<String> expectedExtensionModules = metadata.getList(Config.EXPECTED_EXTENSION_MODULES);
 		String defaultNamespace = metadata.getString(Config.DEFAULT_NAMESPACE_KEY);
@@ -182,13 +180,13 @@ public class ConceptUpdateHelper extends ComponentService {
 					newVersionConcept.getAllOwlAxiomMembers().forEach(axiom -> axiom.setActive(false));
 					newVersionConcept.getDescriptions().forEach(description -> {
 						if (StringUtils.isEmpty(description.getInactivationIndicator())) {
-							description.setInactivationIndicator(inactivationIndicatorNames.get(Concepts.CONCEPT_NON_CURRENT));
+							description.setInactivationIndicator(InactivationIndicatorUtil.getInactivationIndicator(branch, Concepts.CONCEPT_NON_CURRENT));
 						}
 					});
 				}
 
 				// Create or update concept inactivation indicator refset members based on the json inactivation map
-				updateInactivationIndicator(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, Concepts.CONCEPT_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId);
+				updateInactivationIndicator(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, Concepts.CONCEPT_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId, branch);
 
 				// Create or update concept historical association refset members based on the json inactivation map
 				updateAssociations(newVersionConcept, existingConcept, existingConceptFromParent, refsetMembersToPersist, defaultModuleId);
@@ -209,6 +207,7 @@ public class ConceptUpdateHelper extends ComponentService {
 
 			for (Description description : newVersionConcept.getDescriptions()) {
 				description.setConceptId(newVersionConcept.getConceptId());
+				description.setLanguageCode(description.getLanguageCode().toLowerCase());
 				if (description.getDescriptionId() == null) {
 					description.setDescriptionId(reservedIds.getNextId(ComponentType.Description).toString());
 				}
@@ -223,7 +222,7 @@ public class ConceptUpdateHelper extends ComponentService {
 
 				// Description inactivation indicator changes
 				updateInactivationIndicator(description, existingDescription, existingDescriptionFromParent, refsetMembersToPersist,
-						Concepts.DESCRIPTION_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId);
+						Concepts.DESCRIPTION_INACTIVATION_INDICATOR_REFERENCE_SET, defaultModuleId, branch);
 
 				// Description association changes
 				updateAssociations(description, existingDescription, existingDescriptionFromParent, refsetMembersToPersist, defaultModuleId);
@@ -410,7 +409,8 @@ public class ConceptUpdateHelper extends ComponentService {
 			SnomedComponentWithInactivationIndicator existingConceptFromParent,
 			Collection<ReferenceSetMember> refsetMembersToPersist,
 			String indicatorReferenceSet,
-			String defaultModuleId) {
+			String defaultModuleId,
+		 	Branch branch) {
 
 		if (newComponent instanceof Description newDescription) {
 			if (newDescription.isActive()) {
@@ -423,8 +423,8 @@ public class ConceptUpdateHelper extends ComponentService {
 		}
 
 		String newIndicatorName = newComponent.getInactivationIndicator();
-		final String newIndicatorId = newIndicatorName != null ? inactivationIndicatorNames.inverse().get(newIndicatorName) : null;
-		if (newIndicatorName != null && newIndicatorId == null) {
+		final String newIndicatorId = newIndicatorName != null ? InactivationIndicatorUtil.getInactivationIndicatorInverse(branch, newIndicatorName) : null;
+		if (isInactivationIndicatorNotRecognised(newIndicatorName, branch)) {
 			throw new IllegalArgumentException(newComponent.getClass().getSimpleName() + " inactivation indicator not recognised '" + newIndicatorName + "'.");
 		}
 		Map<String, Set<String>> membersRequired = new HashMap<>();
@@ -436,151 +436,200 @@ public class ConceptUpdateHelper extends ComponentService {
 		memberToKeep.forEach(newComponent::addInactivationIndicatorMember);
 	}
 
-	private <T> List<ReferenceSetMember> updateMetadataRefset(Map<String, Set<String>> membersRequired, String fieldName, T existingComponent, T existingConceptFromParent,
-				Function<T, Collection<ReferenceSetMember>> getter, String refComponent, String moduleId, String defaultModuleId, Collection<ReferenceSetMember> refsetMembersToPersist) {
+	private <T> List<ReferenceSetMember> updateMetadataRefset(
+			Map<String, Set<String>> membersRequired,
+			String fieldName,
+			T existingComponent,
+			T existingConceptFromParent,
+			Function<T, Collection<ReferenceSetMember>> getter,
+			String refComponent,
+			String moduleId,
+			String defaultModuleId,
+			Collection<ReferenceSetMember> refsetMembersToPersist) {
+
+		List<ReferenceSetMember> existingMembers = collectExistingMembers(existingComponent, existingConceptFromParent, getter);
+
+		List<ReferenceSetMember> toKeep = new ArrayList<>();
+		List<ReferenceSetMember> notNeeded = new ArrayList<>();
+
+		matchExactMembers(membersRequired, fieldName, existingMembers, toKeep, notNeeded);
+		if (!membersRequired.isEmpty() && toKeep.isEmpty()) {
+			matchReleaseHashMembers(membersRequired, fieldName, existingMembers, toKeep, notNeeded);
+		}
+		if (!membersRequired.isEmpty() && toKeep.isEmpty()) {
+			reuseMembersWithNewValues(membersRequired, fieldName, existingMembers, toKeep, notNeeded);
+		}
+
+		List<ReferenceSetMember> toPersist = new ArrayList<>();
+		updateActiveAndInactiveMembers(membersRequired, fieldName, refComponent, moduleId, defaultModuleId,
+				existingMembers, toKeep, notNeeded, toPersist);
+
+		refsetMembersToPersist.addAll(toPersist);
+		return toKeep;
+	}
+
+	private <T> List<ReferenceSetMember> collectExistingMembers(
+			T existingComponent, T existingConceptFromParent, Function<T, Collection<ReferenceSetMember>> getter) {
 
 		List<ReferenceSetMember> existingMembers = new ArrayList<>();
-		// We think this getter give us components from the parent branch if they don't exist on the current one
 		if (existingComponent != null) {
 			existingMembers.addAll(getter.apply(existingComponent));
 		}
 		if (existingConceptFromParent != null) {
 			existingMembers.addAll(getter.apply(existingConceptFromParent));
 		}
-		
-		// If we have exactly the same internal document object coming from the current branch as the parent (ie we're actually seeing the
-		// parent object twice), then we can de-duplicate that now - there's no need to save something that is unchanged.
-		// That would just cause the module to jump (in an extension)
-		existingMembers = existingMembers.stream()
+
+		return existingMembers.stream()
 				.filter(distinctByKey(ReferenceSetMember::getInternalId))
-				.sorted(Comparator.comparing(ReferenceSetMember::getReleasedEffectiveTime, Comparator.nullsLast(Comparator.reverseOrder())).thenComparing(ReferenceSetMember::isActive))
-				.collect(Collectors.toList());
+				.sorted(Comparator.comparing(ReferenceSetMember::getReleasedEffectiveTime, Comparator.nullsLast(Comparator.reverseOrder()))
+						.thenComparing(ReferenceSetMember::isActive))
+				.toList();
+	}
 
-		
-		final List<ReferenceSetMember> toKeep = new ArrayList<>();
-		final List<ReferenceSetMember> notNeeded = new ArrayList<>();
-
-		// Find existing members to keep - use an existing one that has the same value if we can
+	private void matchExactMembers(Map<String, Set<String>> membersRequired, String fieldName,
+	                               List<ReferenceSetMember> existingMembers,
+	                               List<ReferenceSetMember> toKeep, List<ReferenceSetMember> notNeeded) {
 		for (ReferenceSetMember existingMember : existingMembers) {
-			final String refsetId = existingMember.getRefsetId();
+			String refsetId = existingMember.getRefsetId();
 			String existingValue = existingMember.getAdditionalField(fieldName);
 			if (membersRequired.containsKey(refsetId) && membersRequired.get(refsetId).contains(existingValue)) {
-				// Keep member
 				toKeep.add(existingMember);
 				membersRequired.get(refsetId).remove(existingValue);
 			} else {
 				notNeeded.add(existingMember);
 			}
 		}
+	}
 
-		// Find existing members to keep - use an existing one that has the same value in release hash if we can
-		if (!membersRequired.isEmpty() && toKeep.isEmpty()) {
-			notNeeded.clear();
-			for (ReferenceSetMember existingMember : existingMembers) {
-				final String refsetId = existingMember.getRefsetId();
-				String existingValueInReleaseHash = null;
-				if (existingMember.getReleaseHash() != null) {
-					String[] hashObjects = existingMember.getReleaseHash().split("\\|");
-					existingValueInReleaseHash = String.valueOf(hashObjects[hashObjects.length - 1]);
-				}
-				if (existingValueInReleaseHash != null && membersRequired.containsKey(refsetId) && membersRequired.get(refsetId).contains(existingValueInReleaseHash)) {
-					// Keep member
-					existingMember.setAdditionalField(fieldName, existingValueInReleaseHash);
-					existingMember.markChanged();
-					toKeep.add(existingMember);
-					membersRequired.get(refsetId).remove(existingValueInReleaseHash);
-				} else {
-					notNeeded.add(existingMember);
-				}
+	private void matchReleaseHashMembers(Map<String, Set<String>> membersRequired, String fieldName,
+	                                     List<ReferenceSetMember> existingMembers,
+	                                     List<ReferenceSetMember> toKeep, List<ReferenceSetMember> notNeeded) {
+		notNeeded.clear();
+		for (ReferenceSetMember existingMember : existingMembers) {
+			String refsetId = existingMember.getRefsetId();
+			String existingValueInReleaseHash = null;
+			if (existingMember.getReleaseHash() != null) {
+				String[] hashObjects = existingMember.getReleaseHash().split("\\|");
+				existingValueInReleaseHash = hashObjects[hashObjects.length - 1];
+			}
+			if (existingValueInReleaseHash != null &&
+					membersRequired.containsKey(refsetId) &&
+					membersRequired.get(refsetId).contains(existingValueInReleaseHash)) {
+				existingMember.setAdditionalField(fieldName, existingValueInReleaseHash);
+				existingMember.markChanged();
+				toKeep.add(existingMember);
+				membersRequired.get(refsetId).remove(existingValueInReleaseHash);
+			} else {
+				notNeeded.add(existingMember);
 			}
 		}
+	}
 
-		//Otherwise, value is mutable, so we can re-use any member with the same refsetId and modify the value
-		if (!membersRequired.isEmpty() && toKeep.isEmpty()) {
-			notNeeded.clear();
-			Set<String> reUsedMemberIds = new HashSet<>();
-			//Any existing refset members that exactly matched refsetId + value would have matched above
-			//So we're safe to reuse anything we can 
-			for (Map.Entry<String, Set<String>> memberEntry : membersRequired.entrySet()) {
-				String refsetId = memberEntry.getKey();
-				Set<String> newValuesRequired = new HashSet<>(memberEntry.getValue());
-
-				for (String newValueRequired : newValuesRequired) {
-					for (ReferenceSetMember existingMember : existingMembers) {
-						//As long as we've not already reused this member!
-						if (existingMember.getRefsetId().equals(refsetId) && !reUsedMemberIds.contains(existingMember.getMemberId())) {
-							// Keep member and modify the value
-							existingMember.setAdditionalField(fieldName, newValueRequired);
-							existingMember.markChanged();
-							toKeep.add(existingMember);
-							membersRequired.get(refsetId).remove(newValueRequired);
-							reUsedMemberIds.add(existingMember.getMemberId());
-							break;
-						}
+	private void reuseMembersWithNewValues(Map<String, Set<String>> membersRequired, String fieldName,
+	                                       List<ReferenceSetMember> existingMembers,
+	                                       List<ReferenceSetMember> toKeep, List<ReferenceSetMember> notNeeded) {
+		notNeeded.clear();
+		Set<String> reUsedMemberIds = new HashSet<>();
+		for (Map.Entry<String, Set<String>> memberEntry : membersRequired.entrySet()) {
+			String refsetId = memberEntry.getKey();
+			Set<String> newValuesRequired = new HashSet<>(memberEntry.getValue());
+			for (String newValueRequired : newValuesRequired) {
+				for (ReferenceSetMember existingMember : existingMembers) {
+					if (existingMember.getRefsetId().equals(refsetId) &&
+							!reUsedMemberIds.contains(existingMember.getMemberId())) {
+						existingMember.setAdditionalField(fieldName, newValueRequired);
+						existingMember.markChanged();
+						toKeep.add(existingMember);
+						membersRequired.get(refsetId).remove(newValueRequired);
+						reUsedMemberIds.add(existingMember.getMemberId());
+						break;
 					}
 				}
 			}
-			notNeeded.addAll(existingMembers.stream().filter(member -> !reUsedMemberIds.contains(member.getMemberId())).toList());
 		}
+		notNeeded.addAll(existingMembers.stream()
+				.filter(member -> !reUsedMemberIds.contains(member.getMemberId()))
+				.toList());
+	}
 
-		List<ReferenceSetMember> toPersist = new ArrayList<>();
+	private void updateActiveAndInactiveMembers(Map<String, Set<String>> membersRequired,
+	                                            String fieldName,
+	                                            String refComponent,
+	                                            String moduleId,
+	                                            String defaultModuleId,
+	                                            List<ReferenceSetMember> existingMembers,
+	                                            List<ReferenceSetMember> toKeep,
+	                                            List<ReferenceSetMember> notNeeded,
+	                                            List<ReferenceSetMember> toPersist) {
 
+		// Track duplicates
 		Set<String> allIds = new HashSet<>();
-		//Get a list of components that exist both on the current branch AND the parent branch
-		//But they'll have different values because we de-duplicated them above
 		Set<String> duplicateIds = existingMembers.stream()
 				.map(ReferenceSetMember::getMemberId)
 				.filter(id -> !allIds.add(id))
 				.collect(Collectors.toSet());
 
-		//Members to keep will all be made active, if they're not already
+		// Track IDs already scheduled for persistence
+		Set<String> persistedIds = toPersist.stream()
+				.map(ReferenceSetMember::getMemberId)
+				.collect(Collectors.toSet());
+
+		// Activate members to keep
 		for (ReferenceSetMember member : toKeep) {
 			if (!member.isActive() || duplicateIds.contains(member.getMemberId()) || member.isChanged()) {
-				member.setActive(true);
-				member.markChanged();
-				toPersist.add(member);
+				activateMember(member, toPersist);
 				duplicateIds.remove(member.getMemberId());
+				persistedIds.add(member.getMemberId());
 			}
 		}
+
+		// Deactivate members not needed
 		for (ReferenceSetMember member : notNeeded) {
-			if ((member.isActive() || duplicateIds.contains(member.getMemberId())) &&
-					toPersist.stream().map(ReferenceSetMember::getMemberId)
-							.noneMatch(id -> id.equals(member.getMemberId()))) {
+			boolean alreadyPersisted = persistedIds.contains(member.getMemberId());
+			if ((member.isActive() || duplicateIds.contains(member.getMemberId())) && !alreadyPersisted) {
 				member.revertToReleaseState();
-				member.setActive(false);
-				member.markChanged();
-				// Any change to a component in an extension needs to be done in the default module
-				if (member.isChanged() && (defaultModuleId != null && 
-						!defaultModuleId.equals(Concepts.CORE_MODULE))){
-					member.setModuleId(defaultModuleId);
-				}
+				deactivateMember(member, defaultModuleId);
 				toPersist.add(member);
 				duplicateIds.remove(member.getMemberId());
+				persistedIds.add(member.getMemberId());
 			}
 		}
 
-		// Create any remaining required members
+		// Add required members
 		for (Map.Entry<String, Set<String>> entry : membersRequired.entrySet()) {
-			final String refsetId = entry.getKey();
+			String refsetId = entry.getKey();
 			for (String value : entry.getValue()) {
-				// Create new indicator
-				ReferenceSetMember newIndicatorMember = new ReferenceSetMember(moduleId, refsetId, refComponent);
-				newIndicatorMember.setAdditionalField(fieldName, value);
-				newIndicatorMember.setChanged(true);
-				toPersist.add(newIndicatorMember);
-				toKeep.add(newIndicatorMember);
+				ReferenceSetMember newMember = new ReferenceSetMember(moduleId, refsetId, refComponent);
+				newMember.setAdditionalField(fieldName, value);
+				newMember.setChanged(true);
+				toPersist.add(newMember);
+				toKeep.add(newMember);
+				persistedIds.add(newMember.getMemberId());
 			}
 		}
-
-		refsetMembersToPersist.addAll(toPersist);
-		return toKeep;
 	}
+
+	private void activateMember(ReferenceSetMember member, List<ReferenceSetMember> toPersist) {
+		member.setActive(true);
+		member.markChanged();
+		toPersist.add(member);
+	}
+
+	private void deactivateMember(ReferenceSetMember member, String defaultModuleId) {
+		member.setActive(false);
+		member.markChanged();
+		if (member.isChanged() && defaultModuleId != null && !defaultModuleId.equals(Concepts.CORE_MODULE)) {
+			member.setModuleId(defaultModuleId);
+		}
+	}
+
+
 
 	void doDeleteConcept(String path, Commit commit, Concept concept) {
 		// Mark concept and components as deleted
 		logger.info("Deleting concept {} on branch {} at timepoint {}", concept.getConceptId(), path, commit.getTimepoint());
 		concept.markDeleted();
-		concept.getIdentifiers().forEach(identifier -> identifier.markDeleted());
+		concept.getIdentifiers().forEach(Entity::markDeleted);
 		Set<ReferenceSetMember> membersToDelete = new HashSet<>(concept.getAllOwlAxiomMembers());
 		concept.getDescriptions().forEach(description -> {
 			description.markDeleted();
@@ -633,8 +682,13 @@ public class ConceptUpdateHelper extends ComponentService {
 	 */
 	public void doSaveBatchDescriptions(Collection<Description> descriptions, Commit commit) {
 		Map<String, Set<Character>> charactersNotFoldedSets = searchLanguagesConfiguration.getCharactersNotFoldedSets();
+		Set<String> elisionLanguages = searchLanguagesConfiguration.getElisionLanguages();
 		for (Description description : descriptions) {
-			description.setTermFolded(DescriptionHelper.foldTerm(description.getTerm(),
+			String term = description.getTerm();
+			if (elisionLanguages.contains(description.getLanguageCode())) {
+				term = DescriptionHelper.stripElisions(term);
+			}
+			description.setTermFolded(DescriptionHelper.foldTerm(term,
 					charactersNotFoldedSets.getOrDefault(description.getLanguageCode(), Collections.emptySet())));
 		}
 		doSaveBatchComponents(descriptions, commit, "descriptionId", descriptionRepository);
@@ -747,6 +801,7 @@ public class ConceptUpdateHelper extends ComponentService {
 					C existingParentComponent = rebaseParentExistingComponentMap.get(existingComponent.getId());
 					if (existingComponent.isActive() ||
 							(existingParentComponent != null && !Objects.equals(existingComponent.getReleasedEffectiveTime(), existingParentComponent.getReleasedEffectiveTime()))) {
+						existingComponent.revertToReleaseState();
 						existingComponent.setActive(false);
 						existingComponent.setChanged(true);
 						
@@ -804,4 +859,13 @@ public class ConceptUpdateHelper extends ComponentService {
 		return versionControlHelper;
 	}
 
+	private boolean isInactivationIndicatorNotRecognised(String newIndicatorName, Branch branch) {
+		boolean requestedCNC = Objects.equals(newIndicatorName, "CONCEPT_NON_CURRENT") || Objects.equals(newIndicatorName, CONCEPT_NON_CURRENT);
+		if (requestedCNC) {
+			return false;
+		}
+
+		final String newIndicatorId = newIndicatorName != null ? InactivationIndicatorUtil.getInactivationIndicatorInverse(branch, newIndicatorName) : null;
+		return newIndicatorName != null && newIndicatorId == null;
+	}
 }

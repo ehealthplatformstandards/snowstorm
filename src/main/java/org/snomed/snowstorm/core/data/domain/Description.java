@@ -23,7 +23,8 @@ import java.util.stream.Collectors;
 @Document(indexName = "#{@indexNameProvider.indexName('description')}", createIndex = false)
 public class Description extends SnomedComponent<Description> implements SnomedComponentWithInactivationIndicator, SnomedComponentWithAssociations {
 
-	private static final Pattern TAG_PATTERN = Pattern.compile(".+ \\((.+)\\)");
+	//Previous pattern ".+ \\((.+)\\)" vulnerable to polynomial runtime due to backtracking
+	private static final Pattern TAG_PATTERN = Pattern.compile(".*? \\(([^()]+)\\)");
 
 	public interface Fields extends SnomedComponent.Fields {
 		String DESCRIPTION_ID = "descriptionId";
@@ -159,6 +160,19 @@ public class Description extends SnomedComponent<Description> implements SnomedC
 	@Override
 	protected Object[] getReleaseHashObjects() {
 		return new Object[] {active, term, getModuleId(), languageCode, typeId, caseSignificanceId};
+	}
+
+	@Override
+	protected void restoreFromReleaseHash(String[] releaseHashParts) {
+		if (releaseHashParts.length < 6) {
+			return;
+		}
+		setActive(Boolean.parseBoolean(releaseHashParts[0]));
+		setTerm(releaseHashParts[1]);
+		setModuleId(releaseHashParts[2]);
+		setLanguageCode(releaseHashParts[3]);
+		setTypeId(releaseHashParts[4]);
+		setCaseSignificanceId(releaseHashParts[5]);
 	}
 
 	@Override
@@ -513,6 +527,7 @@ public class Description extends SnomedComponent<Description> implements SnomedC
 	public void clone(Description description) {
 		setDescriptionId(description.getDescriptionId());
 		setActive(description.isActive());
+		setInactivationIndicator(description.getInactivationIndicator());
 		setTerm(description.getTerm());
 		setConceptId(description.getConceptId());
 		setEffectiveTimeI(description.getEffectiveTimeI());

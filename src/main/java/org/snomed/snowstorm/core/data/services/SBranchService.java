@@ -1,6 +1,7 @@
 package org.snomed.snowstorm.core.data.services;
 
-import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery;
+import io.kaicode.elasticvc.api.BranchNotFoundException;
 import io.kaicode.elasticvc.api.BranchService;
 import io.kaicode.elasticvc.api.PathUtil;
 import io.kaicode.elasticvc.domain.Branch;
@@ -12,8 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.core.data.domain.CodeSystem;
 import org.snomed.snowstorm.core.data.domain.CodeSystemVersion;
+import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.services.classification.BranchClassificationStatusService;
-import org.snomed.snowstorm.core.data.services.postcoordination.ExpressionRepositoryService;
 import org.snomed.snowstorm.core.data.services.servicehook.CommitServiceHookClient;
 import org.snomed.snowstorm.rest.pojo.SetAuthorFlag;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,10 +30,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
-import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.range;
 import static java.lang.String.format;
 import static org.snomed.snowstorm.core.data.services.BranchMetadataHelper.AUTHOR_FLAGS_METADATA_KEY;
 import static org.snomed.snowstorm.core.data.services.BranchMetadataHelper.INTERNAL_METADATA_KEY;
@@ -103,14 +102,13 @@ public class SBranchService {
 		NativeQueryBuilder queryBuilder = new NativeQueryBuilder()
 				.withQuery(bool(bq -> bq
 						.must(termQuery("path", path))
-						.must(range(rq -> rq.field("start").gte(JsonData.of(timestamp.getTime()))))))
-				.withSourceFilter(new FetchSourceFilter(new String[]{"path", "start", "end", "head", "base", "locked"}, null))
+						.must(RangeQuery.of(r -> r.date(nrq -> nrq.field("start").gte(String.valueOf(timestamp.getTime()))))._toQuery())))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{"path", "start", "end", "head", "base", "locked"}, null))
 				.withSort(s -> s.field(fb -> fb.field("start")))
 				.withPageable(pageable);
 
 		SearchHits<Branch> searchHits = elasticsearchOperations.search(queryBuilder.build(), Branch.class);
-		return new PageImpl<>(searchHits.get().map(SearchHit::getContent).collect(Collectors.toList()),
-				pageable, searchHits.getTotalHits());
+		return new PageImpl<>(searchHits.get().map(SearchHit::getContent).toList(), pageable, searchHits.getTotalHits());
 	}
 
 	public List<Branch> findByPathAndBaseTimepoint(Set<String> path, Date baseTimestamp, Sort sort) {
@@ -118,10 +116,9 @@ public class SBranchService {
 				.withQuery(bool(bq -> bq
 						.must(termsQuery("path", path))
 						.must(termQuery("base", baseTimestamp.getTime()))))
-				.withSort(s -> s.field(fb -> fb.field("start")))
 				.withPageable(PageRequest.of(0, path.size(), sort));
 		return elasticsearchOperations.search(queryBuilder.build(), Branch.class)
-				.stream().map(SearchHit::getContent).collect(Collectors.toList());
+				.stream().map(SearchHit::getContent).toList();
 	}
 
 	public Branch findByPathAndHeadTimepoint(String path, long head) {
@@ -214,13 +211,13 @@ public class SBranchService {
 
 	public Date getPartialCommitTimestamp(String branchPath) {
 		Branch latestCompleteCommit = branchService.findLatest(branchPath);
-		for (Class<? extends DomainEntity> entityType : domainEntityConfiguration.getAllDomainEntityTypes()) {
+		for (Class<? extends DomainEntity<?>> entityType : domainEntityConfiguration.getAllDomainEntityTypes()) {
 			NativeQuery query = new NativeQueryBuilder().withQuery(
 					bool(bq -> bq
 							.must(termQuery("path", branchPath))
-							.must(range(rq -> rq.field("start").gt(JsonData.of(latestCompleteCommit.getStart().getTime()))))))
+							.must(RangeQuery.of(r -> r.date(nrq -> nrq.field("start").gt(String.valueOf(latestCompleteCommit.getStart().getTime()))))._toQuery())))
 					.build();
-			List<? extends DomainEntity> domainEntities = elasticsearchOperations.search(query, entityType).stream().map(SearchHit::getContent).collect(Collectors.toList());
+			List<? extends DomainEntity<?>> domainEntities = elasticsearchOperations.search(query, entityType).stream().map(SearchHit::getContent).toList();
 			if (!domainEntities.isEmpty()) {
 				return domainEntities.get(0).getStart();
 			}
@@ -239,9 +236,45 @@ public class SBranchService {
 		return branchService.updateMetadata(branchPath, metadata);
 	}
 
-	public void setMetadataItem(String branchPath, String key, String value) {
-		Metadata metadata = branchService.findBranchOrThrow(branchPath).getMetadata();
-		metadata.putString(key, value);
-		branchService.updateMetadata(branchPath, metadata);
+	/**
+	 * Return the configured module identifiers for the given branch path.
+	 *
+	 * @param branchPath The branch path to find module identifiers.
+	 * @return The configured module identifiers for the given branch path.
+	 */
+	public Set<String> getModules(String branchPath) {
+		Branch branch = getBranchNullable(branchPath);
+		if (branch == null) {
+			return Collections.emptySet();
+		}
+
+		CodeSystem codeSystem = codeSystemService.findClosestCodeSystemUsingAnyBranch(branchPath, true);
+		if (codeSystem != null && "MAIN".equals(codeSystem.getBranchPath())) {
+			return Set.of(Concepts.CORE_MODULE, Concepts.MODEL_MODULE, Concepts.ICD10_MODULE);
+		}
+
+		Metadata metadata = branch.getMetadata();
+		if (metadata == null || metadata.size() == 0) {
+			return Collections.emptySet();
+		}
+
+		Set<String> moduleIds = new HashSet<>();
+		if (metadata.containsKey(BranchMetadataKeys.DEFAULT_MODULE_ID)) {
+			moduleIds.add(metadata.getString(BranchMetadataKeys.DEFAULT_MODULE_ID));
+		}
+
+		if (metadata.containsKey(BranchMetadataKeys.EXPECTED_EXTENSION_MODULES)) {
+			moduleIds.addAll(metadata.getList(BranchMetadataKeys.EXPECTED_EXTENSION_MODULES));
+		}
+
+		return moduleIds;
+	}
+
+	private Branch getBranchNullable(String branchPath) {
+		try {
+			return branchService.findBranchOrThrow(branchPath, true);
+		} catch (BranchNotFoundException | IllegalArgumentException e) {
+			return null;
+		}
 	}
 }

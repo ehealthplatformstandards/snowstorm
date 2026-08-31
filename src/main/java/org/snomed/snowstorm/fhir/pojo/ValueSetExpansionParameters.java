@@ -7,7 +7,6 @@ import org.snomed.snowstorm.rest.ControllerHelper;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
-import java.net.URI;
 import java.util.List;
 
 import static java.lang.String.format;
@@ -80,14 +79,13 @@ public final class ValueSetExpansionParameters {
 	}
 
 	public PageRequest getPageRequest(Sort sort) {
-		int offset = this.offset != null ? this.offset : 0;
+		int offsetInt = this.offset != null ? this.offset : 0;
 		int pageSize = this.count != null ? this.count : FHIRHelper.DEFAULT_PAGESIZE;
-		if (offset % pageSize != 0) {
-			throw FHIRHelper.exception(format("Parameter 'offset' '%s' must be a multiplication of 'count' (page size) '%s'.", offset, pageSize),
+		if (pageSize > 0 && offsetInt % pageSize != 0) {
+			throw FHIRHelper.exception(format("Parameter 'offset' '%s' must be a multiplication of 'count' (page size) '%s'.", offsetInt, pageSize),
 					OperationOutcome.IssueType.INVALID, 400);
 		}
-		return ControllerHelper.getPageRequest(offset, pageSize, sort);
-
+		return ControllerHelper.getPageRequest(offsetInt, pageSize, sort);
 	}
 
 	public String getId() {
@@ -95,7 +93,7 @@ public final class ValueSetExpansionParameters {
 	}
 
 	public String getUrl() {
-		return url==null?null:url.toString();
+		return url;
 	}
 
 	public String getValueSetVersion() {
@@ -128,6 +126,10 @@ public final class ValueSetExpansionParameters {
 
 	public Boolean getIncludeDesignations() {
 		return includeDesignations;
+	}
+
+	public boolean getIncludeDesignationsAsBool() {
+		return includeDesignations != null && includeDesignations;
 	}
 
 	public List<String> getDesignations() {
@@ -189,7 +191,7 @@ public final class ValueSetExpansionParameters {
 	public CanonicalUri getVersionValueSet() { return versionValueSet;
 	}
 
-	public Boolean getAllowMaximumSizeExpansion() {
-		return allowMaximumSizeExpansion;
+	public boolean getAllowMaximumSizeExpansionAsBoolean() {
+		return Boolean.TRUE.equals(allowMaximumSizeExpansion);
 	}
 }

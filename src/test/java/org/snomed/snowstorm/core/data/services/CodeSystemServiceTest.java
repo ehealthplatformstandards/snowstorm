@@ -26,7 +26,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	private  CodeSystemUpgradeService codeSystemUpgradeService;
 
 	@Test
-	void createCodeSystems() throws ServiceException {
+	void createCodeSystems() {
 		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN").setOwner("SNOMED International"));
 
 		assertEquals(1, codeSystemService.findAll().size());
@@ -40,7 +40,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void createCodeSystemWithBadBranchPath() throws ServiceException {
+	void createCodeSystemWithBadBranchPath() {
 		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
 		assertEquals(1, codeSystemService.findAll().size());
 		CodeSystem codeSystemBe = new CodeSystem("SNOMEDCT-TEST", "MAIN.TEST");
@@ -48,20 +48,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void createPostcoordinatedCodeSystemInRoot() {
-		CodeSystem codeSystemPCE = new CodeSystem("SNOMEDCT", "MAIN").setMaximumPostcoordinationLevel((short) 2);
-		assertThrows(IllegalArgumentException.class, () -> codeSystemService.createCodeSystem(codeSystemPCE));
-	}
-
-	@Test
-	void createPostcoordinatedCodeSystem() throws ServiceException {
-		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
-		CodeSystem codeSystemPCE = new CodeSystem("SNOMEDCT-PCETEST", "MAIN/PCETEST").setMaximumPostcoordinationLevel((short) 2);
-		codeSystemService.createCodeSystem(codeSystemPCE);
-	}
-
-	@Test
-	void testFindLatestImportedVersion() throws ServiceException {
+	void testFindLatestImportedVersion() {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 		codeSystemService.createVersion(codeSystem, 20190731, "");
@@ -77,7 +64,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void testFindInternalVersion() throws ServiceException {
+	void testFindInternalVersion() {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 
@@ -96,7 +83,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void testFindLatestEffectiveVersion() throws ServiceException {
+	void testFindLatestEffectiveVersion() {
 		CodeSystem codeSystem = new CodeSystem("SNOMEDCT", "MAIN");
 		codeSystemService.createCodeSystem(codeSystem);
 		codeSystemService.createVersion(codeSystem, 20190131, "");
@@ -114,7 +101,7 @@ class CodeSystemServiceTest extends AbstractTest {
 	}
 
 	@Test
-	void testFindVersionsByCodeSystemAndBaseTimepointRange() throws ServiceException {
+	void testFindVersionsByCodeSystemAndBaseTimepointRange() {
 		CodeSystem codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
 		codeSystemService.createVersion(codeSystem, 20230101, "20230101 release");
 		// Within time range
@@ -127,6 +114,26 @@ class CodeSystemServiceTest extends AbstractTest {
 
 		// Time points out of order
 		assertThrows(IllegalArgumentException.class, () -> codeSystemService.findVersionsByCodeSystemAndBaseTimepointRange(codeSystem, now().toEpochMilli(), now().minusMillis(2000L).toEpochMilli()));
+	}
+
+	@Test
+	void testDeleteCodeSystemAndVersionsRemovesInternalReleaseVersions() {
+		// Create CodeSystem
+		CodeSystem codeSystem = new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX");
+		codeSystemService.createCodeSystem(codeSystem);
+
+		// Version CodeSystem
+		codeSystemService.createVersion(codeSystem, 20230101, "Regular release", false);
+		codeSystemService.createVersion(codeSystem, 20230601, "Internal release", true);
+
+		// Assert before deletion
+		assertEquals(2, codeSystemService.findAllVersions("SNOMEDCT-XX", true, true).size());
+
+		// Delete
+		codeSystemService.deleteCodeSystemAndVersions(codeSystem, false);
+
+		// Assert after deletion
+		assertEquals(0, codeSystemService.findAllVersions("SNOMEDCT-XX", true, true).size());
 	}
 
 	@Test

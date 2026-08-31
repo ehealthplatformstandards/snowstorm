@@ -143,21 +143,50 @@ public class BranchMergeService {
 				}
 				mergeJob.setStatus(JobStatus.COMPLETED);
 				mergeJob.setEndDate(new Date());
-				branchMergeJobRepository.save(mergeJob);
+				persistMergeJob(mergeJob);
 			} catch (IntegrityException e) {
+				logger.error("Integrity conflicts during merge job {}", mergeJob.getId(), e);
 				mergeJob.setStatus(JobStatus.CONFLICTS);
 				mergeJob.setMessage(e.getMessage());
-				mergeJob.setApiError(ApiErrorFactory.createErrorForMergeConflicts(e.getMessage(), e.getIntegrityIssueReport()));
-				branchMergeJobRepository.save(mergeJob);
+				mergeJob.setEndDate(new Date());
+				try {
+					mergeJob.setApiError(ApiErrorFactory.createErrorForMergeConflicts(e.getMessage(), e.getIntegrityIssueReport()));
+				} catch (Exception detailsException) {
+					logger.error("Failed to build integrity conflict details for merge job {}", mergeJob.getId(), detailsException);
+					mergeJob.setApiError(ApiErrorFactory.createErrorForMergeConflicts(mergeJob.getMessage()));
+				}
+				boolean saved = persistMergeJob(mergeJob);
+				if (!saved && mergeJob.getApiErrorJson() != null) {
+					logger.warn("Merge job {} CONFLICTS persist failed with integrity details; retrying without them", mergeJob.getId());
+					mergeJob.setApiError(ApiErrorFactory.createErrorForMergeConflicts(mergeJob.getMessage()));
+					persistMergeJob(mergeJob);
+				}
 			} catch (Exception e) {
+				logger.error("Failed to merge branch", e);
 				mergeJob.setStatus(JobStatus.FAILED);
 				mergeJob.setMessage(e.getMessage());
-				branchMergeJobRepository.save(mergeJob);
-				logger.error("Failed to merge branch",e);
+				mergeJob.setEndDate(new Date());
+				persistMergeJob(mergeJob);
 			}
 		});
 
 		return mergeJob;
+	}
+
+	/**
+	 * Persist merge job status without letting repository failures escape the async lambda
+	 * (unobserved Future), which would leave the ES document stuck at IN_PROGRESS.
+	 *
+	 * @return true if save succeeded
+	 */
+	private boolean persistMergeJob(BranchMergeJob mergeJob) {
+		try {
+			branchMergeJobRepository.save(mergeJob);
+			return true;
+		} catch (Exception saveException) {
+			logger.error("Failed to persist merge job {} with status {}", mergeJob.getId(), mergeJob.getStatus(), saveException);
+			return false;
+		}
 	}
 
 	public BranchMergeJob getBranchMergeJobOrThrow(String id) {
@@ -268,8 +297,11 @@ public class BranchMergeService {
 				logger.info("Performing promotion {} -> {}", source, target);
 				final Map<String, Set<String>> versionsReplaced = sourceBranch.getVersionsReplaced();
 				final Map<Class<? extends DomainEntity>, ElasticsearchRepository> componentTypeRepoMap = domainEntityConfiguration.getAllTypeRepositoryMap();
-				componentTypeRepoMap.entrySet().parallelStream().forEach(entry -> promoteEntities(source, commit, entry.getKey(), entry.getValue(), versionsReplaced));
-
+				componentTypeRepoMap.entrySet().parallelStream().forEach(entry -> {
+							if (!domainEntityConfiguration.getEntityTypesToSkipVersionControl().contains(entry.getKey())) {
+								promoteEntities(source, commit, entry.getKey(), entry.getValue(), versionsReplaced);
+							}
+						});
 				commit.markSuccessful();
 			}
 		}
@@ -296,7 +328,7 @@ public class BranchMergeService {
 								.must(termQuery(PATH, path))
 								.mustNot(existsQuery(END)))
 				)
-				.withSourceFilter(new FetchSourceFilter(new String[]{
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{
 						PATH, RELEASED, RELEASED_EFFECTIVE_TIME,
 						ReferenceSetMember.Fields.MEMBER_ID, ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID,
 						ReferenceSetMember.Fields.REFSET_ID
@@ -328,7 +360,7 @@ public class BranchMergeService {
 											.must(termQuery(idField, componentId))
 											.mustNot(existsQuery(END)))
 							)
-							.withSourceFilter(new FetchSourceFilter(new String[]{
+							.withSourceFilter(new FetchSourceFilter(null, new String[]{
 									PATH, RELEASED, RELEASED_EFFECTIVE_TIME,
 									ReferenceSetMember.Fields.MEMBER_ID, ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID,
 									ReferenceSetMember.Fields.REFSET_ID
@@ -377,7 +409,7 @@ public class BranchMergeService {
 				bool(b -> b
 						.must(changesOnBranchCriteria.getEntityBranchCriteria(componentClass))
 						.must(clause)))
-				.withSourceFilter(new FetchSourceFilter(new String[]{idField}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{idField}, null))
 				.withPageable(LARGE_PAGE);
 		try (SearchHitsIterator<T> stream = elasticsearchOperations.searchForStream(changesQueryBuilder.build(), componentClass)) {
 			stream.forEachRemaining(hit -> componentsChangedOnBranch.add(hit.getContent().getId()));
@@ -396,7 +428,7 @@ public class BranchMergeService {
 						// Version must come from an ancestor branch
 						.mustNot(termQuery("path", path))))
 				.withFilter(termsQuery(idField, componentsChangedOnBranch))
-				.withSourceFilter(new FetchSourceFilter(new String[]{idField}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{idField}, null))
 				.withPageable(LARGE_PAGE);
 		try (SearchHitsIterator<T> stream = elasticsearchOperations.searchForStream(parentQueryBuilder.build(), componentClass)) {
 			stream.forEachRemaining(hit -> duplicateComponents.add(hit.getContent().getId()));
@@ -444,7 +476,7 @@ public class BranchMergeService {
 				.withQuery(bool(b -> b.must(entityBranchCriteria)
 						.must(termQuery("path", branch))))
 				.withPageable(ComponentService.LARGE_PAGE)
-				.withSourceFilter(new FetchSourceFilter(new String[]{idField}, null)).build(), clazz)) {
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{idField}, null)).build(), clazz)) {
 			conceptStream.forEachRemaining(c -> ids.add(c.getContent().getId()));
 		}
 
@@ -456,7 +488,7 @@ public class BranchMergeService {
 							.mustNot(termQuery("path", branch))))
 					.withFilter(termsQuery(idField, idsBatch))
 					.withPageable(ComponentService.LARGE_PAGE)
-					.withSourceFilter(new FetchSourceFilter(new String[]{idField}, null)).build(), clazz)) {
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{idField}, null)).build(), clazz)) {
 				conceptStream.forEachRemaining(c -> {
 					if(ids.contains(c.getContent().getId())) {
 						duplicateIds.add(c.getContent().getId());

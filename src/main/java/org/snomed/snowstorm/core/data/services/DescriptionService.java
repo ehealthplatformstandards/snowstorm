@@ -66,6 +66,7 @@ import static io.kaicode.elasticvc.helper.QueryHelper.*;
 import static org.snomed.snowstorm.config.Config.*;
 import static org.snomed.snowstorm.core.data.domain.ReferenceSetMember.Fields.REFSET_ID;
 import static org.snomed.snowstorm.core.data.domain.ReferenceSetMember.LanguageFields.ACCEPTABILITY_ID_FIELD_PATH;
+import static org.snomed.snowstorm.core.data.domain.SnomedComponent.Fields.ACTIVE;
 import static org.snomed.snowstorm.core.util.AggregationUtils.getAggregations;
 
 
@@ -106,7 +107,7 @@ public class DescriptionService extends ComponentService {
 	private int aggregationMaxProcessableResultsSize;
 
 	public enum SearchMode {
-		STANDARD, REGEX, WHOLE_WORD, WILDCARD
+		STANDARD, REGEX, WHOLE_WORD, WILDCARD, EXACT
 	}
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());
@@ -250,7 +251,7 @@ public class DescriptionService extends ComponentService {
 			// Apply semantic tag filter
 			fsnQueryBuilder
 					.withPageable(LARGE_PAGE)
-					.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.CONCEPT_ID}, null));
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{Description.Fields.CONCEPT_ID}, null));
 
 			Set<Long> conceptSemanticTagMatches = new LongOpenHashSet();
 			if (allSemanticTags.size() == 1) {
@@ -386,7 +387,7 @@ public class DescriptionService extends ComponentService {
 				.withQuery(bool(bq -> bq
 						.must(branchCriteria.getEntityBranchCriteria(Concept.class))
 						.must(termQuery(Concept.Fields.ACTIVE, true))))
-				.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 				.withPageable(LARGE_PAGE).build(), Concept.class)) {
 			stream.forEachRemaining(hit -> activeConcepts.add(hit.getContent().getConceptIdAsLong()));
 		}
@@ -512,102 +513,175 @@ public class DescriptionService extends ComponentService {
 		joinLangRefsetMembers(branchCriteria, conceptMiniMap.keySet(), descriptionIdMap);
 	}
 
-	public SortedMap<Long, Long> applyDescriptionFilter(Collection<Long> conceptIds, List<TermFilter> termFilters, List<LanguageFilter> languageFilters,
-			List<DescriptionTypeFilter> descriptionTypeFilters, List<DialectFilter> dialectFilters,
-			BranchCriteria branchCriteria, ECLQueryService eclQueryService, BoolQuery.Builder masterDescriptionQuery) {
+	public SortedMap<Long, Long> applyDescriptionFilter(
+			Collection<Long> conceptIds,
+			List<TermFilter> termFilters,
+			List<LanguageFilter> languageFilters,
+			List<DescriptionTypeFilter> descriptionTypeFilters,
+			List<DialectFilter> dialectFilters,
+			BranchCriteria branchCriteria,
+			ECLQueryService eclQueryService,
+			BoolQuery.Builder masterDescriptionQuery) {
 
-		for (TermFilter termFilter : termFilters) {
-			BoolQuery.Builder termFilterQuery = bool();
-			boolean termEquals = isEquals(termFilter.getBooleanComparisonOperator());
-			for (TypedSearchTerm typedSearchTerm : termFilter.getTypedSearchTermSet()) {
-				BoolQuery.Builder typedSearchTermQuery = bool();
-				SearchMode searchMode = typedSearchTerm.getType() == SearchType.WILDCARD ? SearchMode.WILDCARD : SearchMode.STANDARD;
-				addTermClauses(typedSearchTerm.getTerm(), searchMode, typedSearchTermQuery);
-				termFilterQuery.should(typedSearchTermQuery.build()._toQuery());// Logical OR
-			}
-			addClause(termFilterQuery.build()._toQuery(), masterDescriptionQuery, termEquals);
-		}
+		applyTermFilters(termFilters, masterDescriptionQuery);
+		applyLanguageFilters(languageFilters, masterDescriptionQuery);
+		applyDescriptionTypeFilters(descriptionTypeFilters, branchCriteria, eclQueryService, masterDescriptionQuery);
 
-		for (LanguageFilter languageFilter : languageFilters) {
-			addClause(termsQuery(Description.Fields.LANGUAGE_CODE, languageFilter.getLanguageCodes().stream().map(String::toLowerCase).collect(Collectors.toList())),
-					masterDescriptionQuery, isEquals(languageFilter.getBooleanComparisonOperator()));
-		}
-
-		for (DescriptionTypeFilter descriptionTypeFilter : descriptionTypeFilters) {
-			Set<String> typeIds;
-			if (descriptionTypeFilter.getSubExpressionConstraint() != null) {
-				typeIds = runExpressionConstraint(branchCriteria, eclQueryService, descriptionTypeFilter.getSubExpressionConstraint());
-				if (typeIds.isEmpty()) {
-					typeIds.add(NO_MATCH);
-				}
-			} else {
-				typeIds = descriptionTypeFilter.getTypes().stream().map(DescriptionType::getTypeId).collect(Collectors.toSet());
-			}
-			addClause(termsQuery(Description.Fields.TYPE_ID, typeIds), masterDescriptionQuery, isEquals(descriptionTypeFilter.getBooleanComparisonOperator()));
-		}
-
-		BoolQuery.Builder criteria = bool().must(branchCriteria.getEntityBranchCriteria(Description.class))
-				.filter(termsQuery(Description.Fields.CONCEPT_ID, conceptIds))
-				.must(masterDescriptionQuery.build()._toQuery());
-
-		final SortedMap<Long, Long> descriptionToConceptMap = new Long2ObjectLinkedOpenHashMap<>();
-		NativeQueryBuilder searchQueryBuilder = new NativeQueryBuilder()
-				.withQuery(criteria.build()._toQuery())
-				.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null))
-				.withPageable(LARGE_PAGE);
-		try (SearchHitsIterator<Description> stream = elasticsearchOperations.searchForStream(searchQueryBuilder.build(), Description.class)) {
-			stream.forEachRemaining(hit -> {
-				Description description = hit.getContent();
-				descriptionToConceptMap.put(Long.parseLong(description.getDescriptionId()), Long.parseLong(description.getConceptId()));
-			});
-		}
+		SortedMap<Long, Long> descriptionToConceptMap =
+				executeDescriptionQuery(conceptIds, branchCriteria, masterDescriptionQuery);
 
 		if (!descriptionToConceptMap.isEmpty() && !dialectFilters.isEmpty()) {
-			for (DialectFilter dialectFilter : dialectFilters) {
-				BoolQuery.Builder masterLangRefsetQuery = bool().must(branchCriteria.getEntityBranchCriteria(ReferenceSetMember.class));
-				masterLangRefsetQuery.must(termQuery(SnomedComponent.Fields.ACTIVE, true));
-				masterLangRefsetQuery.filter(termsQuery(ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID, descriptionToConceptMap.keySet()));
-
-				boolean equals = isEquals(dialectFilter.getBooleanComparisonOperator());
-				BoolQuery.Builder acceptabilityQuery = bool();
-				if (dialectFilter.getSubExpressionConstraint() != null) {
-					Set<String> dialects = runExpressionConstraint(branchCriteria, eclQueryService, dialectFilter.getSubExpressionConstraint());
-					if (dialects.isEmpty()) {
-						dialects.add(NO_MATCH);
-					}
-					acceptabilityQuery.must(termsQuery(REFSET_ID, dialects));
-				} else {
-					Map<String, Set<String>> acceptabilityMap = dialectAcceptabilitiesToMap(dialectFilter.getDialectAcceptabilities(), branchCriteria, eclQueryService);
-					for (Map.Entry<String, Set<String>> stringSetEntry : acceptabilityMap.entrySet()) {
-						BoolQuery.Builder langRefsetQuery = bool();
-						langRefsetQuery.must(termQuery(REFSET_ID, stringSetEntry.getKey()));
-						if (!stringSetEntry.getValue().isEmpty()) {
-							langRefsetQuery.must(termsQuery(ACCEPTABILITY_ID_FIELD_PATH, stringSetEntry.getValue()));
-						}
-						acceptabilityQuery.should(langRefsetQuery.build()._toQuery());
-					}
-				}
-				addClause(acceptabilityQuery.build()._toQuery(), masterLangRefsetQuery, equals);
-
-				NativeQueryBuilder langRefsetSearch = new NativeQueryBuilder()
-						.withQuery(masterLangRefsetQuery.build()._toQuery())
-						.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
-						.withPageable(LARGE_PAGE);
-				Set<Long> acceptableDescriptions = new LongOpenHashSet();
-				try (SearchHitsIterator<ReferenceSetMember> stream = elasticsearchOperations.searchForStream(langRefsetSearch.build(), ReferenceSetMember.class)) {
-					stream.forEachRemaining(hit -> acceptableDescriptions.add(Long.parseLong(hit.getContent().getReferencedComponentId())));
-				}
-
-				Set<Long> notAcceptableDescriptions =
-						descriptionToConceptMap.keySet().stream().filter(Predicate.not(acceptableDescriptions::contains)).collect(Collectors.toSet());
-				for (Long notAcceptableDescription : notAcceptableDescriptions) {
-					descriptionToConceptMap.remove(notAcceptableDescription);
-				}
-			}
+			applyDialectFilters(dialectFilters, descriptionToConceptMap, branchCriteria, eclQueryService);
 		}
 
 		return descriptionToConceptMap;
 	}
+
+	private void applyTermFilters(List<TermFilter> termFilters, BoolQuery.Builder masterQuery) {
+		for (TermFilter filter : termFilters) {
+			BoolQuery.Builder filterQuery = bool();
+			boolean equals = isEquals(filter.getBooleanComparisonOperator());
+
+			for (TypedSearchTerm typedTerm : filter.getTypedSearchTermSet()) {
+				BoolQuery.Builder termQuery = bool();
+				SearchMode mode = typedTerm.getType() == SearchType.WILDCARD
+						? SearchMode.WILDCARD : SearchMode.STANDARD;
+				addTermClauses(typedTerm.getTerm(), mode, termQuery);
+				filterQuery.should(termQuery.build()._toQuery()); // OR
+			}
+			addClause(filterQuery.build()._toQuery(), masterQuery, equals);
+		}
+	}
+
+	private void applyLanguageFilters(List<LanguageFilter> languageFilters,
+	                                  BoolQuery.Builder masterQuery) {
+		for (LanguageFilter filter : languageFilters) {
+			boolean equals = isEquals(filter.getBooleanComparisonOperator());
+			List<String> codes = filter.getLanguageCodes().stream()
+					.map(String::toLowerCase)
+					.toList();
+			addClause(termsQuery(Description.Fields.LANGUAGE_CODE, codes), masterQuery, equals);
+		}
+	}
+
+	private void applyDescriptionTypeFilters(List<DescriptionTypeFilter> typeFilters,
+	                                         BranchCriteria branchCriteria,
+	                                         ECLQueryService eclQueryService,
+	                                         BoolQuery.Builder masterQuery) {
+		for (DescriptionTypeFilter filter : typeFilters) {
+			boolean equals = isEquals(filter.getBooleanComparisonOperator());
+			Set<String> typeIds = resolveDescriptionTypeIds(filter, branchCriteria, eclQueryService);
+			addClause(termsQuery(Description.Fields.TYPE_ID, typeIds), masterQuery, equals);
+		}
+	}
+
+	private Set<String> resolveDescriptionTypeIds(DescriptionTypeFilter filter,
+	                                              BranchCriteria branchCriteria,
+	                                              ECLQueryService eclQueryService) {
+		if (filter.getSubExpressionConstraint() != null) {
+			Set<String> ids = runExpressionConstraint(branchCriteria, eclQueryService, filter.getSubExpressionConstraint());
+			if (ids.isEmpty()) {
+				ids.add(NO_MATCH);
+			}
+			return ids;
+		}
+		return filter.getTypes().stream()
+				.map(DescriptionType::getTypeId)
+				.collect(Collectors.toSet());
+	}
+
+	private SortedMap<Long, Long> executeDescriptionQuery(Collection<Long> conceptIds,
+	                                                      BranchCriteria branchCriteria,
+	                                                      BoolQuery.Builder masterQuery) {
+		BoolQuery.Builder criteria = bool()
+				.must(branchCriteria.getEntityBranchCriteria(Description.class))
+				.filter(termsQuery(Description.Fields.CONCEPT_ID, conceptIds))
+				.must(masterQuery.build()._toQuery());
+
+		SortedMap<Long, Long> map = new Long2ObjectLinkedOpenHashMap<>();
+		NativeQueryBuilder builder = new NativeQueryBuilder()
+				.withQuery(criteria.build()._toQuery())
+				.withSourceFilter(new FetchSourceFilter(null,
+						new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null))
+				.withPageable(LARGE_PAGE);
+
+		try (SearchHitsIterator<Description> stream =
+				     elasticsearchOperations.searchForStream(builder.build(), Description.class)) {
+			stream.forEachRemaining(hit -> {
+				Description d = hit.getContent();
+				map.put(Long.parseLong(d.getDescriptionId()), Long.parseLong(d.getConceptId()));
+			});
+		}
+		return map;
+	}
+
+	private void applyDialectFilters(List<DialectFilter> dialectFilters,
+	                                 SortedMap<Long, Long> descriptionMap,
+	                                 BranchCriteria branchCriteria,
+	                                 ECLQueryService eclQueryService) {
+
+		for (DialectFilter filter : dialectFilters) {
+			Set<Long> acceptableDescriptions = resolveAcceptableDescriptions(filter, descriptionMap.keySet(), branchCriteria, eclQueryService);
+
+			Set<Long> notAcceptable = descriptionMap.keySet().stream()
+					.filter(Predicate.not(acceptableDescriptions::contains))
+					.collect(Collectors.toSet());
+
+			notAcceptable.forEach(descriptionMap::remove);
+		}
+	}
+
+	private Set<Long> resolveAcceptableDescriptions(DialectFilter filter,
+	                                                Set<Long> descriptionIds,
+	                                                BranchCriteria branchCriteria,
+	                                                ECLQueryService eclQueryService) {
+		BoolQuery.Builder masterQuery = bool()
+				.must(branchCriteria.getEntityBranchCriteria(ReferenceSetMember.class))
+				.must(termQuery(SnomedComponent.Fields.ACTIVE, true))
+				.filter(termsQuery(ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID, descriptionIds));
+
+		boolean equals = isEquals(filter.getBooleanComparisonOperator());
+		BoolQuery.Builder acceptabilityQuery = buildAcceptabilityQuery(filter, branchCriteria, eclQueryService);
+		addClause(acceptabilityQuery.build()._toQuery(), masterQuery, equals);
+
+		NativeQueryBuilder builder = new NativeQueryBuilder()
+				.withQuery(masterQuery.build()._toQuery())
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
+				.withPageable(LARGE_PAGE);
+
+		Set<Long> acceptable = new LongOpenHashSet();
+		try (SearchHitsIterator<ReferenceSetMember> stream =
+				     elasticsearchOperations.searchForStream(builder.build(), ReferenceSetMember.class)) {
+			stream.forEachRemaining(hit ->
+					acceptable.add(Long.parseLong(hit.getContent().getReferencedComponentId())));
+		}
+		return acceptable;
+	}
+
+	private BoolQuery.Builder buildAcceptabilityQuery(DialectFilter filter,
+	                                                  BranchCriteria branchCriteria,
+	                                                  ECLQueryService eclQueryService) {
+		BoolQuery.Builder query = bool();
+		if (filter.getSubExpressionConstraint() != null) {
+			Set<String> dialects = runExpressionConstraint(branchCriteria, eclQueryService, filter.getSubExpressionConstraint());
+			if (dialects.isEmpty()) {
+				dialects.add(NO_MATCH);
+			}
+			query.must(termsQuery(REFSET_ID, dialects));
+		} else {
+			Map<String, Set<String>> map = dialectAcceptabilitiesToMap(filter.getDialectAcceptabilities(), branchCriteria, eclQueryService);
+			for (Map.Entry<String, Set<String>> entry : map.entrySet()) {
+				BoolQuery.Builder refsetQuery = bool()
+						.must(termQuery(REFSET_ID, entry.getKey()));
+				if (!entry.getValue().isEmpty()) {
+					refsetQuery.must(termsQuery(ACCEPTABILITY_ID_FIELD_PATH, entry.getValue()));
+				}
+				query.should(refsetQuery.build()._toQuery());
+			}
+		}
+		return query;
+	}
+
 
 	private boolean isEquals(String booleanComparisonOperator) {
 		return booleanComparisonOperator.equals("=");
@@ -681,7 +755,7 @@ public class DescriptionService extends ComponentService {
 		Query descriptionQuery = descriptionQueryBuilder.build()._toQuery();
 		NativeQueryBuilder searchQueryBuilder = new NativeQueryBuilder()
 				.withQuery(descriptionQuery)
-				.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null));
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null));
 
 		NativeQuery query = searchQueryBuilder.withPageable(PAGE_OF_ONE).build();
 		query.setTrackTotalHits(true);
@@ -757,7 +831,7 @@ public class DescriptionService extends ComponentService {
 			NativeQuery nativeSearchQuery = new NativeQueryBuilder()
 					.withQuery(queryBuilder.build()._toQuery())
 					.withFilter(termsQuery(ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID, descriptionToConceptMap.keySet()))
-					.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
 					.withPageable(LARGE_PAGE)
 					.build();
 			Set<Long> filteredDescriptionIds = new LongOpenHashSet();
@@ -793,7 +867,7 @@ public class DescriptionService extends ComponentService {
 										.filter(termsQuery(Concept.Fields.CONCEPT_ID, conceptIdsToSearch)))
 								)
 								.withSort(SortOptions.of(sb -> sb.field(fs -> fs.field("_doc"))))
-								.withSourceFilter(new FetchSourceFilter(new String[]{Concept.Fields.CONCEPT_ID}, null))
+								.withSourceFilter(new FetchSourceFilter(null, new String[]{Concept.Fields.CONCEPT_ID}, null))
 								.withPageable(LARGE_PAGE)
 								.build(), Concept.class)) {
 					stream.forEachRemaining(hit -> filteredConceptIds.add(hit.getContent().getConceptIdAsLong()));
@@ -810,11 +884,12 @@ public class DescriptionService extends ComponentService {
 						new NativeQueryBuilder()
 								.withQuery(bool(bq -> bq
 										.must(termQuery(REFSET_ID, criteria.getConceptRefset()))
+										.must(termQuery(ACTIVE, true))
 										.filter(branchCriteria.getEntityBranchCriteria(ReferenceSetMember.class))
 										.filter(termsQuery(ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID, conceptIdsToSearch)))
 								)
 								.withSort(SortOptions.of(sb -> sb.field(fs -> fs.field("_doc"))))
-								.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
+								.withSourceFilter(new FetchSourceFilter(null, new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
 								.withPageable(LARGE_PAGE)
 								.build(), ReferenceSetMember.class)) {
 					stream.forEachRemaining(hit -> filteredConceptIds.add(parseLong(hit.getContent().getReferencedComponentId())));
@@ -870,7 +945,13 @@ public class DescriptionService extends ComponentService {
 			typedSearchTermQuery.must(termQuery(Description.Fields.DESCRIPTION_ID, term));
 		} else {
 			BoolQuery.Builder termFilter = bool();
-			if (searchMode == SearchMode.REGEX) {
+			if (searchMode == SearchMode.EXACT) {
+				final String exactTerm = term;
+				termFilter.must(Query.of(q -> q.term(t -> t
+						.field(Description.Fields.TERM)
+						.value(exactTerm)
+						.caseInsensitive(true))));
+			} else if (searchMode == SearchMode.REGEX) {
 				// https://www.elastic.co/guide/en/elasticsearch/reference/master/query-dsl-query-string-query.html#_regular_expressions
 				if (term.startsWith("^")) {
 					term = term.substring(1);
@@ -896,15 +977,27 @@ public class DescriptionService extends ComponentService {
 				for (BoolQuery.Builder uniqueTermQuery : uniqueTermQueries) {
 					foldedTermsQueryBuilder.should(uniqueTermQuery.build()._toQuery());// Logical OR
 				}
-				termFilter.must(foldedTermsQueryBuilder.build()._toQuery());
 
+				Set<String> elisionLanguages = searchLanguagesConfiguration.getElisionLanguages();
+				String strippedTerm = elisionLanguages.isEmpty() ? term : DescriptionHelper.stripElisions(term);
 				if (SearchMode.WILDCARD == searchMode) {
+					termFilter.must(foldedTermsQueryBuilder.build()._toQuery());
 					String replace = DescriptionHelper.wildcardToCaseInsensitiveRegex(term);
 					termFilter.must(regexpQuery(Description.Fields.TERM, replace));
-				} else if (containingNonAlphanumeric(term)) {
+				} else if (containingNonAlphanumeric(strippedTerm)) {
 					// Apply second constraint against non-folded term
-					String regexString = constructRegexQuery(term);
-					termFilter.must(regexpQuery(Description.Fields.TERM, regexString));
+					termFilter.must(foldedTermsQueryBuilder.build()._toQuery());
+					termFilter.must(regexpQuery(Description.Fields.TERM, constructRegexQuery(term)));
+				} else {
+					if (!strippedTerm.equals(term)) {
+						for (String languageFoldingStrategy : languageFoldingStrategies) {
+							BoolQuery.Builder elisionFallback = bool();
+							elisionFallback.must(getTermQuery(strippedTerm, SearchMode.WHOLE_WORD, charactersNotFoldedSets, languageFoldingStrategy).build()._toQuery());
+							elisionFallback.must(termsQuery(Description.Fields.LANGUAGE_CODE, elisionLanguages));
+							foldedTermsQueryBuilder.should(elisionFallback.build()._toQuery());
+						}
+					}
+					termFilter.must(foldedTermsQueryBuilder.build()._toQuery());
 				}
 			}
 			typedSearchTermQuery.filter(termFilter.build()._toQuery());
@@ -943,7 +1036,7 @@ public class DescriptionService extends ComponentService {
 		}
 	}
 
-	private List<String> analyze(String text, StandardAnalyzer analyzer) {
+	public static List<String> analyze(String text, StandardAnalyzer analyzer) {
 		List<String> result = new ArrayList<>();
 		try {
 			TokenStream tokenStream = analyzer.tokenStream("contents", text);
@@ -953,12 +1046,13 @@ public class DescriptionService extends ComponentService {
 				result.add(attr.toString());
 			}
 		} catch (IOException e) {
-			logger.error("Failed to analyze text {}", text, e);
+			LoggerFactory.getLogger(DescriptionService.class)
+					.error("Failed to analyze text {}", text, e);
 		}
 		return result;
 	}
 
-	private String constructSimpleQueryString(String searchTerm) {
+	public static String constructSimpleQueryString(String searchTerm) {
 		return (searchTerm.trim().replace(" ", "* ") + "*").replace("**", "*");
 	}
 
@@ -1000,7 +1094,7 @@ public class DescriptionService extends ComponentService {
 		return regexBuilder.toString();
 	}
 
-	private String constructSearchTerm(List<String> tokens) {
+	public static String constructSearchTerm(List<String> tokens) {
 		StringBuilder builder = new StringBuilder();
 		for (String token : tokens) {
 			builder.append(token);

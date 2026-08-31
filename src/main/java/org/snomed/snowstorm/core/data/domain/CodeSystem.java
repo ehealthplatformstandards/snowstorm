@@ -22,9 +22,8 @@ import static org.snomed.snowstorm.fhir.config.FHIRConstants.SNOMED_URI;
  * Represents an edition or extension of SNOMED-CT
  */
 @Document(indexName = "#{@indexNameProvider.indexName('codesystem')}", createIndex = false)
-@JsonPropertyOrder({"name", "owner", "shortName", "branchPath", "uriModuleId", "uri", "dependantVersionEffectiveTime", "dailyBuildAvailable",
-		"latestDailyBuild", "postcoordinated", "maximumPostcoordinationLevel", "countryCode", "defaultLanguageCode", "defaultLanguageReferenceSets",
-		"maintainerType", "latestVersion", "languages", "modules"})
+@JsonPropertyOrder({"name", "owner", "shortName", "branchPath", "uriModuleId", "uri", "dependantVersionEffectiveTime", "dailyBuildAvailable", "latestDailyBuild",
+		"countryCode", "defaultLanguageCode", "defaultLanguageReferenceSets", "maintainerType", "latestVersion", "languages", "modules"})
 public class CodeSystem implements CodeSystemCreate {
 
 	public interface Fields {
@@ -50,6 +49,9 @@ public class CodeSystem implements CodeSystemCreate {
 	private String countryCode;
 
 	@Field(type = FieldType.Keyword)
+	private String countryName;
+
+	@Field(type = FieldType.Keyword)
 	private String maintainerType;
 
 	@Field(type = FieldType.Keyword)
@@ -69,8 +71,8 @@ public class CodeSystem implements CodeSystemCreate {
 	@Field(type = FieldType.Keyword)
 	private String latestDailyBuild;
 
-	@Field(type = FieldType.Short)
-	private short maximumPostcoordinationLevel;
+	@Transient
+	private String defaultModuleId;
 
 	@Transient
 	private Integer dependantVersionEffectiveTime;
@@ -164,6 +166,14 @@ public class CodeSystem implements CodeSystemCreate {
 		this.countryCode = countryCode;
 	}
 
+	public String getCountryName() {
+		return countryName;
+	}
+
+	public void setCountryName(String countryName) {
+		this.countryName = countryName;
+	}
+
 	public String getMaintainerType() {
 		return maintainerType;
 	}
@@ -212,34 +222,13 @@ public class CodeSystem implements CodeSystemCreate {
 		this.latestDailyBuild = latestDailyBuild;
 	}
 
-	/**
-	 * Postcoordination Levels:
-	 * Level 0 = postcoordination disabled.
-	 * Level 1 = postcoordination enabled, transformation level 0
-	 * Level 2 = postcoordination enabled, transformation level 1
-	 * @return the level of postcoordination supported in this code system, 0 means disabled.
-	 */
-	public Short getMaximumPostcoordinationLevel() {
-		return maximumPostcoordinationLevel != 0 ? maximumPostcoordinationLevel : null;
-	}
-
-	public CodeSystem setMaximumPostcoordinationLevel(short maximumPostcoordinationLevel) {
-		this.maximumPostcoordinationLevel = maximumPostcoordinationLevel;
-		return this;
-	}
-
 	@JsonIgnore
-	public int getMaximumPostcoordinationLevelNullSafe() {
-		return maximumPostcoordinationLevel;
+	public String getDefaultModuleId() {
+		return defaultModuleId;
 	}
 
-	public Boolean isPostcoordinated() {
-		return maximumPostcoordinationLevel != 0 ? true : null;
-	}
-
-	@JsonIgnore
-	public boolean isPostcoordinatedNullSafe() {
-		return maximumPostcoordinationLevel != 0;
+	public void setDefaultModuleId(String defaultModuleId) {
+		this.defaultModuleId = defaultModuleId;
 	}
 
 	public Integer getDependantVersionEffectiveTime() {

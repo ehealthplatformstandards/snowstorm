@@ -18,11 +18,11 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
-public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
+class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 
 	@Autowired
 	private FHIRConceptService conceptService;
@@ -33,7 +33,7 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 	private FHIRCodeSystemVersion codeSystemVersion;
 
 	@BeforeEach
-	public void testSetup() throws IOException, ServiceException {
+	void testSetup() throws IOException, ServiceException {
 		// Create generic code system for tests
 		File codeSystemFile = new File("src/test/resources/dummy-fhir-content/hl7/CodeSystem-v3-ContextControl.json");
 		assertTrue(codeSystemFile.isFile());
@@ -76,7 +76,7 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 	}
 
 	@AfterEach
-	public void testAfter() {
+	void testAfter() {
 		// Delete the value set
 		ResponseEntity<String> response = restTemplate.exchange(baseUrl + "/ValueSet?url=http://example.com/fhir/vs/sex&version=0.1", HttpMethod.DELETE, null, String.class);
 		assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode(), response.getBody());
@@ -86,7 +86,7 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 	}
 
 	@Test
-	public void testExpandUsingHierarchy() {
+	void testExpandUsingHierarchy() {
 		HttpEntity<String> expandRequest = new HttpEntity<>("""
                 {
                 	"resourceType": "Parameters",
@@ -98,7 +98,8 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
                 					"compose": {
                 						"include": [
                 							{
-                								"system": "http://terminology.hl7.org/CodeSystem/v3-ContextControl",								"filter": [
+                								"system": "http://terminology.hl7.org/CodeSystem/v3-ContextControl",
+                								"filter": [
                 									{
                 										"property": "concept",
                 										"op": "is-a",
@@ -119,7 +120,7 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 	}
 
 	@Test
-	public void testExpandUsingHierarchyWithExclude() {
+	void testExpandUsingHierarchyWithExclude() {
 		HttpEntity<String> expandRequest = new HttpEntity<>("""
                 {
                 	"resourceType": "Parameters",
@@ -162,7 +163,7 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 	}
 
 	@Test
-	public void testExpandIncludesOtherValueSet() {
+	void testExpandIncludesOtherValueSet() {
 		HttpEntity<String> expandRequest = new HttpEntity<>("""
                 {
                 	"resourceType": "Parameters",
@@ -195,6 +196,56 @@ public class FHIRValueSetProviderExpandGenericTest extends AbstractFHIRTest {
 		assertEquals(HttpStatus.OK, expandResponse.getStatusCode(), expandResponse.getBody());
 		ValueSet valueSet = fhirJsonParser.parseResource(ValueSet.class, expandResponse.getBody());
 		assertEquals(2, valueSet.getExpansion().getContains().size());
+	}
+
+	@Test
+	void testSearchMultipleWordsOrPrefixes() {
+		// "display": "additive, propagating",
+		System.out.println("----------");
+		ResponseEntity<String> response = restTemplate.exchange(baseUrl + "/ValueSet/$expand?url=http://terminology.hl7.org/CodeSystem/v3-ContextControl?fhir_vs", HttpMethod.GET, null, String.class);
+		System.out.println("Search no filter");
+		assertExpand(response, 8, null);
+
+		System.out.println("----------");
+		response = restTemplate.exchange(baseUrl + "/ValueSet/$expand?url=http://terminology.hl7.org/CodeSystem/v3-ContextControl?fhir_vs&filter=additive", HttpMethod.GET, null, String.class);
+		System.out.println("Search additive");
+		System.out.println(response.getBody());
+		assertExpand(response, 2, "[AP|'additive, propagating', AN|'additive, non-propagating']");
+
+		System.out.println("----------");
+		response = restTemplate.exchange(baseUrl + "/ValueSet/$expand?url=http://terminology.hl7.org/CodeSystem/v3-ContextControl?fhir_vs&filter=additive propagating", HttpMethod.GET, null, String.class);
+		System.out.println("Search additive propagating");
+		System.out.println(response.getBody());
+		assertExpand(response, 2, "[AP|'additive, propagating', AN|'additive, non-propagating']");
+
+		System.out.println("----------");
+		response = restTemplate.exchange(baseUrl + "/ValueSet/$expand?url=http://terminology.hl7.org/CodeSystem/v3-ContextControl?fhir_vs&filter=add", HttpMethod.GET, null, String.class);
+		System.out.println("Search add");
+		System.out.println(response.getBody());
+		assertExpand(response, 2, "[AP|'additive, propagating', AN|'additive, non-propagating']");
+
+		System.out.println("----------");
+		response = restTemplate.exchange(baseUrl + "/ValueSet/$expand?url=http://terminology.hl7.org/CodeSystem/v3-ContextControl?fhir_vs&filter=add prop non", HttpMethod.GET, null, String.class);
+		System.out.println("Search add prop non");
+		System.out.println(response.getBody());
+		assertExpand(response, 1, "[AN|'additive, non-propagating']");
+
+		System.out.println("----------");
+	}
+
+	private void assertExpand(ResponseEntity<String> response, int expected, String expectedCodingString) {
+		assertEquals(HttpStatus.OK, response.getStatusCode());
+		assertNotNull(response.getBody());
+		ValueSet valueSet = fhirJsonParser.parseResource(ValueSet.class, response.getBody());
+		List<ValueSet.ValueSetExpansionContainsComponent> contains = valueSet.getExpansion().getContains();
+		assertEquals(expected, contains.size());
+		if (expectedCodingString != null) {
+			assertEquals(expectedCodingString, toCodingsString(contains));
+		}
+	}
+
+	private String toCodingsString(List<ValueSet.ValueSetExpansionContainsComponent> contains) {
+		return contains.stream().map(coding -> "%s|'%s'".formatted(coding.getCode(), coding.getDisplay())).toList().toString();
 	}
 
 }

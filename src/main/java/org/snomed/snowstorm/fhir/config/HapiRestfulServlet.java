@@ -5,26 +5,32 @@ import ca.uhn.fhir.parser.LenientErrorHandler;
 import ca.uhn.fhir.parser.StrictErrorHandler;
 import ca.uhn.fhir.rest.api.EncodingEnum;
 import ca.uhn.fhir.rest.server.RestfulServer;
+import ca.uhn.fhir.rest.server.interceptor.CorsInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.snomed.snowstorm.fhir.exceptions.ElasticsearchExceptionInterceptor;
 import org.snomed.snowstorm.fhir.services.*;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.context.support.WebApplicationContextUtils;
-
-import jakarta.servlet.ServletException;
+import org.springframework.web.cors.CorsConfiguration;
 
 public class HapiRestfulServlet extends RestfulServer {
 
     private static final long serialVersionUID = 1L;
-    private final BuildProperties buildProperties;
-    private final FHIRCodeSystemService codeSystemService;
 
-    private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final transient BuildProperties buildProperties;
 
-    public HapiRestfulServlet(BuildProperties buildProperties, FHIRCodeSystemService codeSystemService) {
+	private final transient FHIRCodeSystemService codeSystemService;
+
+	private final boolean allowAnyOrigin;
+
+    private final transient Logger logger = LoggerFactory.getLogger(getClass());
+
+    public HapiRestfulServlet(BuildProperties buildProperties, FHIRCodeSystemService codeSystemService, boolean allowAnyOrigin) {
         this.buildProperties = buildProperties;
         this.codeSystemService = codeSystemService;
+        this.allowAnyOrigin = allowAnyOrigin;
     }
 
     /**
@@ -32,9 +38,13 @@ public class HapiRestfulServlet extends RestfulServer {
      * servlet to define resource providers, or set up configuration, interceptors, etc.
      */
     @Override
-    protected void initialize() throws ServletException {
+    protected void initialize() {
         final WebApplicationContext applicationContext =
                 WebApplicationContextUtils.getWebApplicationContext(this.getServletContext());
+
+		if (applicationContext == null) {
+			throw new IllegalStateException("Failed to recover web application context while initializing HAPI FHIR servlet");
+		}
 
         setDefaultResponseEncoding(EncodingEnum.JSON);
 
@@ -71,7 +81,8 @@ public class HapiRestfulServlet extends RestfulServer {
 				applicationContext.getBean(FHIRConceptMapProvider.class),
 				applicationContext.getBean(FHIRMedicationProvider.class),
 				applicationContext.getBean(FHIRBundleProvider.class),
-				applicationContext.getBean(FHIRStructureDefinitionProvider.class));
+				applicationContext.getBean(FHIRStructureDefinitionProvider.class)
+		);
 
 		registerProvider(applicationContext.getBean(FHIRVersionsOperationProvider.class));
 
@@ -80,6 +91,18 @@ public class HapiRestfulServlet extends RestfulServer {
         // Register interceptors
         registerInterceptor(new RootInterceptor());
 
+	    registerInterceptor(new ElasticsearchExceptionInterceptor());
+
+		if (allowAnyOrigin) {
+			CorsConfiguration corsConfig = new CorsConfiguration();
+			corsConfig.addAllowedOriginPattern("*");
+			corsConfig.addAllowedMethod("*");
+			corsConfig.addAllowedHeader("*");
+			corsConfig.setAllowCredentials(false);
+			registerInterceptor(new CorsInterceptor(corsConfig));
+		}
+
         logger.info("FHIR Resource providers and interceptors registered");
     }
+
 }

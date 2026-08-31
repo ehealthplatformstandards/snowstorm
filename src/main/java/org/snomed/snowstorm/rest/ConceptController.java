@@ -76,6 +76,12 @@ public class ConceptController {
 	private SemanticIndexService semanticIndexService;
 
 	@Autowired
+	private PartialHierarchyService partialHierarchyService;
+
+	@Autowired
+	private InactivationService inactivationService;
+
+	@Autowired
 	private ExpressionService expressionService;
 
 	@Autowired
@@ -293,6 +299,15 @@ public class ConceptController {
 				acceptLanguageHeader);
 	}
 
+	@Operation(summary = "Retrieve concept and description inactivation reasons for a branch.",
+			description = "Exposes Snowstorm's Concepts inactivation indicator and historical association BiMaps together with "
+					+ "cardinality rules used when inactivating concepts and descriptions. "
+					+ "Concept non-current is omitted from description reasons when the branch has cncEnabled=false.")
+	@GetMapping(value = "/browser/{branch}/inactivation-reasons")
+	public InactivationReasonsResponse getInactivationReasons(@PathVariable String branch) {
+		return inactivationService.getInactivationReasons(BranchPathUriUtil.decodePath(branch));
+	}
+
 	@Operation(summary = "Load concepts in the browser format.",
 			description = "When enabled 'searchAfter' can be used for unlimited pagination. " +
 					"Load the first page then take the 'searchAfter' value from the response and use that " +
@@ -340,6 +355,21 @@ public class ConceptController {
 		return conceptService.find(path, conceptIds, ControllerHelper.parseAcceptLanguageHeaderWithDefaultFallback(acceptLanguageHeader));
 	}
 
+	@Operation(summary = "Load a partial IS-A hierarchy above the given seed concept codes.",
+			description = "Returns graph nodes (code, direct parents, optional preferred term) for the seed concepts and all inferred ancestors on the branch, using the semantic index.")
+	@PostMapping(value = "/browser/{branch}/concepts/partial-hierarchy")
+	@JsonView(value = View.Component.class)
+	@ReadOnlyApiWhenEnabled
+	public List<PartialHierarchyNode> getPartialHierarchy(
+			@PathVariable String branch,
+			@RequestBody HierarchyRequest request,
+			@RequestHeader(value = "Accept-Language", defaultValue = Config.DEFAULT_ACCEPT_LANG_HEADER) String acceptLanguageHeader) {
+
+		String path = BranchPathUriUtil.decodePath(branch);
+		return partialHierarchyService.loadPartialHierarchy(path, request.getCodes(), request.isIncludeTerms(),
+				ControllerHelper.parseAcceptLanguageHeaderWithDefaultFallback(acceptLanguageHeader));
+	}
+
 	@Operation(summary = "Load a concept in the browser format.",
 			description = "During content authoring previous versions of the concept can be loaded from version control.\n" +
 					"To do this use the branch path format {branch@" + BranchTimepoint.DATE_FORMAT_STRING + "} or {branch@epoch_milliseconds}.\n" +
@@ -378,6 +408,23 @@ public class ConceptController {
 		ConceptHistory conceptHistory = conceptService.loadConceptHistory(conceptId, branch, showFutureVersions, showInternalReleases);
 
 		return ControllerHelper.throwIfNotFound("conceptHistory", conceptHistory);
+	}
+
+	@Operation(summary = "Summarise the stated-form impact of inactivating a concept.",
+			description = "Runs stated ECL for immediate children (`<! conceptId`) and inbound attribute usages (`*: * = conceptId`), "
+					+ "loads GCI axioms and historical association members targeting the concept, and returns current parents "
+					+ "plus proposed parents (the inactivated concept's stated parents) in one response for inactivation review tabs.")
+	@GetMapping(value = "/browser/{branch}/concepts/{conceptId}/inactivation-impact")
+	@JsonView(value = View.Component.class)
+	public InactivationImpactResponse getInactivationImpact(
+			@PathVariable String branch,
+			@PathVariable String conceptId,
+			@RequestHeader(value = "Accept-Language", defaultValue = Config.DEFAULT_ACCEPT_LANG_HEADER) String acceptLanguageHeader) {
+
+		return inactivationService.getInactivationImpact(
+				BranchPathUriUtil.decodePath(branch),
+				conceptId,
+				ControllerHelper.parseAcceptLanguageHeaderWithDefaultFallback(acceptLanguageHeader));
 	}
 
 	@GetMapping(value = "/{branch}/concepts/{conceptId}/descriptions")
@@ -528,7 +575,7 @@ public class ConceptController {
 	}
 
 	@DeleteMapping(value = "/{branch}/concepts/{conceptId}")
-	@PreAuthorize("hasPermission('AUTHOR', #branch)")
+	@PreAuthorize("hasPermission('ADMIN', #branch) || (hasPermission('AUTHOR', #branch) && !#force)")
 	public void deleteConcept(
 			@PathVariable String branch,
 			@PathVariable String conceptId,

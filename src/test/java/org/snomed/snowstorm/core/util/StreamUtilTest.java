@@ -39,6 +39,6 @@ class StreamUtilTest {
 
         assertEquals(testData, outputStream.toString(StandardCharsets.UTF_8));
         String consoleOutput = consoleOut.toString();
-        assertTrue(consoleOutput.contains("Progress: 0%"));
+        assertTrue(consoleOutput.contains("Progress: 100%"));
     }
 }

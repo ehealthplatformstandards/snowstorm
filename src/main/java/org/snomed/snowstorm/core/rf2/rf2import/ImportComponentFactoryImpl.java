@@ -1,6 +1,6 @@
 package org.snomed.snowstorm.core.rf2.rf2import;
 
-import co.elastic.clients.json.JsonData;
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery;
 import com.google.common.collect.Sets;
 import io.kaicode.elasticvc.api.BranchCriteria;
 import io.kaicode.elasticvc.api.BranchService;
@@ -16,9 +16,9 @@ import org.snomed.snowstorm.core.data.services.ConceptUpdateHelper;
 import org.snomed.snowstorm.core.data.services.IdentifierComponentService;
 import org.snomed.snowstorm.core.data.services.ReferenceSetMemberService;
 import org.snomed.snowstorm.core.rf2.RF2Constants;
-import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHitsIterator;
+import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
 
 import java.util.*;
@@ -27,16 +27,21 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
-import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.range;
 import static io.kaicode.elasticvc.api.ComponentService.LARGE_PAGE;
-import static io.kaicode.elasticvc.helper.QueryHelper.termQuery;
-import static io.kaicode.elasticvc.helper.QueryHelper.termsQuery;
 import static java.lang.Long.parseLong;
+import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.*;
+import static io.kaicode.elasticvc.helper.QueryHelper.*;
+import static org.snomed.snowstorm.core.data.domain.Relationship.Fields.*;
 
 public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 
 	private static final int FLUSH_INTERVAL = 5000;
+	public static final String CONCEPT_ROW = "Concept row";
+	public static final String RELATIONSHIP_ROW = "Relationship row";
+	public static final String CONCRETE_RELATIONSHIP_ROW = "Concrete relationship row";
+	public static final String DESCRIPTION_ROW = "Description row";
+	public static final String IDENTIFIER_ROW = "Identifier row";
+	public static final String REFERENCE_SET_MEMBER_ROW = "Reference set member row";
 
 	private final BranchService branchService;
 	private final BranchMetadataHelper branchMetadataHelper;
@@ -54,8 +59,7 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	private final List<PersistBuffer<?>> persistBuffers;
 	private final List<PersistBuffer<?>> coreComponentPersistBuffers;
 	private final MaxEffectiveTimeCollector maxEffectiveTimeCollector;
-	private final Map<String, AtomicLong> componentTypeSkippedMap = Collections.synchronizedMap(new HashMap<>());
-
+	final Map<String, AtomicLong> componentTypeSkippedMap = new HashMap<>();
 	private static final Logger logger = LoggerFactory.getLogger(ImportComponentFactoryImpl.class);
 
 	// A small number of stated relationships also appear in the inferred file. These should not be persisted when importing a snapshot.
@@ -199,9 +203,9 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 							.must(branchCriteriaBeforeOpenCommit.getEntityBranchCriteria(componentClass))
 							.must(termsQuery(idField, componentsAtDate.stream().map(T::getId).toList()))
 							.must(replacementOfThisEffectiveTimeAllowed ?
-									range().field(SnomedComponent.Fields.EFFECTIVE_TIME).gt(JsonData.of(effectiveTime)).build()._toQuery()
-									: range().field(SnomedComponent.Fields.EFFECTIVE_TIME).gte(JsonData.of(effectiveTime)).build()._toQuery())))
-					.withSourceFilter(new FetchSourceFilter(new String[]{idField}, null))// Only fetch the id
+									RangeQuery.of(r -> r.number(nrq -> nrq.field(SnomedComponent.Fields.EFFECTIVE_TIME).gt((double)effectiveTime)))._toQuery()
+									: RangeQuery.of(r -> r.number(nrq -> nrq.field(SnomedComponent.Fields.EFFECTIVE_TIME).gte((double)effectiveTime)))._toQuery())))
+					.withSourceFilter(new FetchSourceFilter(null, new String[]{idField}, null))// Only fetch the id
 					.withPageable(LARGE_PAGE)
 					.build(), componentClass)) {
 				componentsWithSameOrLaterEffectiveTime.forEachRemaining(hit -> {
@@ -231,8 +235,8 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 
 	void completeImportCommit() {
 		if (!componentTypeSkippedMap.isEmpty()) {
-			for (String type : componentTypeSkippedMap.keySet()) {
-				logger.info("{} components of type {} were not imported from RF2 because a newer version was found.", componentTypeSkippedMap.get(type).get(), type);
+			for (Map.Entry<String, AtomicLong> entry : componentTypeSkippedMap.entrySet()) {
+				logger.info("{} components of type {} were not imported from RF2 because a newer version was found.", componentTypeSkippedMap.get(entry.getKey()).get(), entry.getKey());
 			}
 		}
 		persistBuffers.forEach(PersistBuffer::flush);
@@ -242,7 +246,10 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newConceptState(String conceptId, String effectiveTime, String active, String moduleId, String definitionStatusId) {
+	public void newConceptState(String filename, long lineNumber, String conceptId, String effectiveTime, String active, String moduleId, String definitionStatusId) {
+		String context = getRowContext(CONCEPT_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "id", conceptId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "definitionStatusId", definitionStatusId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		final Concept concept = new Concept(conceptId, effectiveTimeI, isActive(active), moduleId, definitionStatusId);
 		if (effectiveTimeI != null) {
@@ -252,8 +259,15 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newRelationshipState(String id, String effectiveTime, String active, String moduleId, String sourceId, String destinationId,
+	public void newRelationshipState(String filename, long lineNumber, String id, String effectiveTime, String active, String moduleId, String sourceId, String destinationId,
 			String relationshipGroup, String typeId, String characteristicTypeId, String modifierId) {
+		String context = getRowContext(RELATIONSHIP_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "id", id);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "sourceId", sourceId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "destinationId", destinationId);
+		Rf2ComponentFieldValidator.requireNonBlankRelationshipGroup(context, relationshipGroup);
+		Rf2ComponentFieldValidator.requireSnomedId(context, TYPE_ID, typeId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "characteristicTypeId", characteristicTypeId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		final Relationship relationship = new Relationship(id, effectiveTimeI, isActive(active), moduleId, sourceId,
 				destinationId, Integer.parseInt(relationshipGroup), typeId, characteristicTypeId, modifierId);
@@ -272,8 +286,15 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newConcreteRelationshipState(String id, String effectiveTime, String active, String moduleId, String sourceId, String value,
+	public void newConcreteRelationshipState(String filename, long lineNumber, String id, String effectiveTime, String active, String moduleId, String sourceId, String value,
 											 String relationshipGroup, String typeId, String characteristicTypeId, String modifierId) {
+		String context = getRowContext(CONCRETE_RELATIONSHIP_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "id", id);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "sourceId", sourceId);
+		Rf2ComponentFieldValidator.requireNonBlank(context, "value", value);
+		Rf2ComponentFieldValidator.requireNonBlankRelationshipGroup(context, relationshipGroup);
+		Rf2ComponentFieldValidator.requireSnomedId(context, TYPE_ID, typeId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "characteristicTypeId", characteristicTypeId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		final Relationship relationship = new Relationship(id, effectiveTimeI, isActive(active), moduleId, sourceId,
 				value, Integer.parseInt(relationshipGroup), typeId, characteristicTypeId, modifierId);
@@ -285,9 +306,15 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newDescriptionState(String id, String effectiveTime, String active, String moduleId, String conceptId, String languageCode,
+	public void newDescriptionState(String filename, long lineNumber, String id, String effectiveTime, String active, String moduleId, String conceptId, String languageCode,
 			String typeId, String term, String caseSignificanceId) {
-
+		String context = getRowContext(DESCRIPTION_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "id", id);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "conceptId", conceptId);
+		Rf2ComponentFieldValidator.requireNonBlank(context, "languageCode", languageCode);
+		Rf2ComponentFieldValidator.requireSnomedId(context, TYPE_ID, typeId);
+		Rf2ComponentFieldValidator.requireNonBlank(context, "term", term);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "caseSignificanceId", caseSignificanceId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		final Description description = new Description(id, effectiveTimeI, isActive(active), moduleId, conceptId, languageCode, typeId, term, caseSignificanceId);
 		if (effectiveTimeI != null) {
@@ -297,7 +324,11 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newIdentifierState(String alternateIdentifier, String effectiveTime, String active, String moduleId, String identifierSchemeId, String referencedComponentId) {
+	public void newIdentifierState(String filename, long lineNumber, String alternateIdentifier, String effectiveTime, String active, String moduleId, String identifierSchemeId, String referencedComponentId) {
+		String context = getRowContext(IDENTIFIER_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireNonBlank(context, "alternateIdentifier", alternateIdentifier);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "identifierSchemeId", identifierSchemeId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "referencedComponentId", referencedComponentId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		Identifier identifier = new Identifier(alternateIdentifier, effectiveTimeI, isActive(active), moduleId, identifierSchemeId, referencedComponentId);
 		if (effectiveTimeI != null) {
@@ -307,9 +338,12 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 	}
 
 	@Override
-	public void newReferenceSetMemberState(String[] fieldNames, String id, String effectiveTime, String active, String moduleId, String refsetId,
+	public void newReferenceSetMemberState(String filename, long lineNumber, String[] fieldNames, String id, String effectiveTime, String active, String moduleId, String refsetId,
 			String referencedComponentId, String... otherValues) {
-
+		String context = getRowContext(REFERENCE_SET_MEMBER_ROW, filename, lineNumber);
+		Rf2ComponentFieldValidator.requireMemberRowId(context, "id", id);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "refsetId", refsetId);
+		Rf2ComponentFieldValidator.requireSnomedId(context, "referencedComponentId", referencedComponentId);
 		Integer effectiveTimeI = getEffectiveTimeI(effectiveTime);
 		ReferenceSetMember member = new ReferenceSetMember(id, effectiveTimeI, isActive(active), moduleId, refsetId, referencedComponentId);
 		for (int i = RF2Constants.MEMBER_ADDITIONAL_FIELD_OFFSET; i < fieldNames.length; i++) {
@@ -347,6 +381,10 @@ public class ImportComponentFactoryImpl extends ImpotentComponentFactory {
 
 	public void useModuleEffectiveTimeFilter(boolean useModuleEffectiveTimeFilter) {
 		this.useModuleEffectiveTimeFilter = useModuleEffectiveTimeFilter;
+	}
+
+	private static String getRowContext(String rowType, String filename, long lineNumber) {
+		return rowType + " in " + filename + " (line " + lineNumber + ")";
 	}
 
 	private abstract class PersistBuffer<E extends Entity> {

@@ -1,15 +1,14 @@
 # Dockerfile responsible of creating the snowstorm image. 
 # The container is dependent on elasticsearch to be up and running (e.g. on port 9200).
 
-# Use a Ubuntu-based image (includes apt)
-FROM ubuntu:22.04
+# Java 25 is required by Snowstorm 11.x dependencies. This image remains Ubuntu-based for apt.
+FROM eclipse-temurin:25-jdk-jammy
 
 # Install Nodejs and libraries necessary for puppeteer to work + utilities
 RUN apt-get update && apt-get install -y curl && \
     curl -sL https://deb.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh && \
     bash /tmp/nodesource_setup.sh \
     && apt-get update && apt-get install -y \
-    openjdk-17-jdk \
     net-tools \
     jq \
     unzip \

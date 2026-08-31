@@ -13,7 +13,6 @@ import org.snomed.snowstorm.core.data.services.pojo.CodeSystemUpgradeJob;
 import org.snomed.snowstorm.core.data.services.pojo.IntegrityIssueReport;
 import org.snomed.snowstorm.dailybuild.DailyBuildService;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -22,47 +21,55 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 import static org.snomed.snowstorm.core.data.services.BranchMetadataHelper.INTERNAL_METADATA_KEY;
-import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.*;
+import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.DEPENDENCY_PACKAGE;
+import static org.snomed.snowstorm.core.data.services.BranchMetadataKeys.DEPENDENCY_RELEASE;
 
 @Service
 public class CodeSystemUpgradeService {
 	private static final long ONE_HOUR_IN_MILLI_SEC = 3600 * 1000;
 	private static final long ONE_DAY_IN_MILLI_SEC = 24 * ONE_HOUR_IN_MILLI_SEC;
 
-	@Autowired
-	private CodeSystemService codeSystemService;
-
-	@Autowired
-	private BranchService branchService;
-
-	@Autowired
-	private BranchMergeService branchMergeService;
-
-	@Autowired
-	private CodeSystemRepository codeSystemRepository;
-
-	@Autowired
-	private DailyBuildService dailyBuildService;
-
-	@Autowired
-	private IntegrityService integrityService;
-
-	@Autowired
-	private UpgradeInactivationService upgradeInactivationService;
-
-	@Autowired
-	private ExecutorService executorService;
-
-	@Value("${snowstorm.rest-api.readonly}")
-	private boolean isReadOnly;
+	private final CodeSystemService codeSystemService;
+	private final BranchService branchService;
+	private final BranchMergeService branchMergeService;
+	private final CodeSystemRepository codeSystemRepository;
+	private final DailyBuildService dailyBuildService;
+	private final IntegrityService integrityService;
+	private final UpgradeInactivationService upgradeInactivationService;
+	private final ExecutorService executorService;
+	private final ModuleDependencyService moduleDependencyService;
+	private final CodeSystemVersionService codeSystemVersionService;
 
 	private static final Map<String, CodeSystemUpgradeJob> upgradeJobMap = new HashMap<>();
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
-	public CodeSystemUpgradeService() {
+	@Autowired
+	public CodeSystemUpgradeService(
+			CodeSystemService codeSystemService,
+			BranchService branchService,
+			BranchMergeService branchMergeService,
+			CodeSystemRepository codeSystemRepository,
+			DailyBuildService dailyBuildService,
+			IntegrityService integrityService,
+			UpgradeInactivationService upgradeInactivationService,
+			ExecutorService executorService,
+			ModuleDependencyService moduleDependencyService,
+			CodeSystemVersionService codeSystemVersionService) {
+		this.codeSystemService = codeSystemService;
+		this.branchService = branchService;
+		this.branchMergeService = branchMergeService;
+		this.codeSystemRepository = codeSystemRepository;
+		this.dailyBuildService = dailyBuildService;
+		this.integrityService = integrityService;
+		this.upgradeInactivationService = upgradeInactivationService;
+		this.executorService = executorService;
+		this.moduleDependencyService = moduleDependencyService;
+		this.codeSystemVersionService = codeSystemVersionService;
+
 		Timer timer = new Timer();
 
 		// Schedules the specified task for repeated fixed-delay execution
@@ -119,13 +126,87 @@ public class CodeSystemUpgradeService {
 		return newJobId;
 	}
 
+	public void upgrade(String codeSystemShortname, Integer newDependantVersion, boolean contentAutomations) throws ServiceException {
+		final String newJobId = createJob(codeSystemShortname, newDependantVersion);
+		this.upgrade(newJobId, codeSystemService.findOrThrow(codeSystemShortname), newDependantVersion, contentAutomations);
+	}
+
 	@PreAuthorize("hasPermission('ADMIN', #codeSystem.branchPath)")
 	public synchronized void upgrade(String id, CodeSystem codeSystem, Integer newDependantVersion, boolean contentAutomations) throws  ServiceException {
 		CodeSystemUpgradeJob job = null;
 		if (id != null) {
 			job = getJob(id);
 		}
-		// Pre checks
+		// preUpgrade checks
+		UpgradePreCheckResult result = preUpgradeChecks(codeSystem, newDependantVersion, job);
+
+		// Disable daily build during upgrade
+		boolean dailyBuildAvailable = codeSystem.isDailyBuildAvailable();
+		if (dailyBuildAvailable) {
+			logger.info("Disabling daily build before upgrade.");
+			codeSystem.setDailyBuildAvailable(false);
+			codeSystemRepository.save(codeSystem);
+
+			// Rollback daily build content
+			logger.info("Rolling back any daily build content before upgrade.");
+			dailyBuildService.rollbackDailyBuildContent(codeSystem);
+		}
+		boolean upgradedSuccessfully = false;
+		String branchPath = codeSystem.getBranchPath();
+		try {
+			CodeSystemVersion newParentVersion = result.getNewParentVersion();
+			Branch newParentVersionBranch = branchService.findLatest(newParentVersion.getBranchPath());
+			Date newParentBaseTimepoint = newParentVersionBranch.getBase();
+			logger.info("Running upgrade of {} to {} version {}.", codeSystem, result.getParentCodeSystem(), newDependantVersion);
+
+			String parentPath = result.getParentCodeSystem().getBranchPath();
+			CodeSystem parentCodeSystem = result.getParentCodeSystem();
+			branchMergeService.rebaseToSpecificTimepointAndRemoveDuplicateContent(parentPath, newParentBaseTimepoint, branchPath, String.format("Upgrading extension to %s@%s.", parentPath, newParentVersion.getVersion()));
+			logger.info("Completed rebase of {} to {} version {}.", codeSystem, parentCodeSystem, newDependantVersion);
+            // Update MDRS TARGET_EFFECTIVE_TIME to reflect new International dependent version
+            moduleDependencyService.setTargetEffectiveTime(branchPath, newDependantVersion);
+
+			if (contentAutomations) {
+				logger.info("Running upgrade content automations on {}.", branchPath);
+				upgradeInactivationService.findAndUpdateDescriptionsInactivation(codeSystem);
+				upgradeInactivationService.findAndUpdateLanguageRefsets(codeSystem);
+				upgradeInactivationService.findAndUpdateAdditionalAxioms(codeSystem);
+				logger.info("Completed upgrade content automations on {}.", branchPath);
+			}
+
+			logger.info("Running post upgrade integrity check on {}", branchPath);
+			Branch extensionBranch = branchService.findLatest(branchPath);
+			IntegrityIssueReport integrityReport = integrityService.findChangedComponentsWithBadIntegrityNotFixed(extensionBranch);
+			logger.info("Completed post upgrade integrity check on {}", branchPath);
+
+			logger.info("Running post upgrade metadata update on {}", branchPath);
+			updateBranchMetaData(branchPath, newParentVersion, extensionBranch, integrityReport.isEmpty());
+			if (job != null) {
+				job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.COMPLETED);
+			}
+
+			upgradedSuccessfully = true;
+		} catch (Exception e) {
+			logger.error("Upgrade on {} failed", branchPath, e);
+			if (job != null) {
+				job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.FAILED);
+				job.setErrorMessage(e.getMessage());
+			}
+			throw e;
+		} finally {
+			// Re-enable daily build
+			if (dailyBuildAvailable) {
+				logger.info("Re-enabling daily build after upgrade.");
+				codeSystem.setDailyBuildAvailable(true);
+				codeSystemRepository.save(codeSystem);
+			}
+
+			logger.info("Upgrade {} on {}", upgradedSuccessfully?"completed":"unsuccessful", branchPath);
+		}
+	}
+
+
+	UpgradePreCheckResult preUpgradeChecks(CodeSystem codeSystem, Integer newDependantVersion, CodeSystemUpgradeJob job) {
 		String branchPath = codeSystem.getBranchPath();
 		String parentPath = PathUtil.getParentPath(branchPath);
 		if (parentPath == null) {
@@ -163,62 +244,72 @@ public class CodeSystemUpgradeService {
 			}
 			throw new IllegalArgumentException(errorMessage);
 		}
-		// Checks complete
+		// Additional dependency checks
+		performAdditionalDependencyCheck(codeSystem, newDependantVersion, job, parentCodeSystem);
+		return new UpgradePreCheckResult(newParentVersion, parentCodeSystem);
+	}
 
-		// Disable daily build during upgrade
-		boolean dailyBuildAvailable = codeSystem.isDailyBuildAvailable();
-		if (dailyBuildAvailable) {
-			logger.info("Disabling daily build before upgrade.");
-			codeSystem.setDailyBuildAvailable(false);
-			codeSystemRepository.save(codeSystem);
+	private void performAdditionalDependencyCheck(CodeSystem codeSystem, Integer newDependantVersion, CodeSystemUpgradeJob job, CodeSystem parentCodeSystem) {
+		// Get additional dependencies directly using the existing method
+		Set<CodeSystem> dependentCodeSystems = moduleDependencyService.getAllDependentCodeSystems(codeSystem);
+		Set<CodeSystem> additionalCodeSystems = dependentCodeSystems.stream()
+			.filter(additional -> !additional.equals(parentCodeSystem))
+			.collect(Collectors.toSet());
 
-			// Rollback daily build content
-			logger.info("Rolling back any daily build content before upgrade.");
-			dailyBuildService.rollbackDailyBuildContent(codeSystem);
+		if (additionalCodeSystems.isEmpty()) {
+			return; // No additional dependencies to check
 		}
-		boolean upgradedSuccessfully = false;
-		try {
-			Branch newParentVersionBranch = branchService.findLatest(newParentVersion.getBranchPath());
-			Date newParentBaseTimepoint = newParentVersionBranch.getBase();
-			logger.info("Running upgrade of {} to {} version {}.", codeSystem, parentCodeSystem, newDependantVersion);
-			branchMergeService.rebaseToSpecificTimepointAndRemoveDuplicateContent(parentPath, newParentBaseTimepoint, branchPath, String.format("Upgrading extension to %s@%s.", parentPath, newParentVersion.getVersion()));
-			logger.info("Completed rebase of {} to {} version {}.", codeSystem, parentCodeSystem, newDependantVersion);
 
-			if (contentAutomations) {
-				logger.info("Running upgrade content automations on {}.", branchPath);
-				upgradeInactivationService.findAndUpdateDescriptionsInactivation(codeSystem);
-				upgradeInactivationService.findAndUpdateLanguageRefsets(codeSystem);
-				upgradeInactivationService.findAndUpdateAdditionalAxioms(codeSystem);
-				logger.info("Completed upgrade content automations on {}.", branchPath);
-			}
+		// Use the existing findCompatibleVersions method
+		List<Integer> compatibleVersions = codeSystemVersionService.findCompatibleVersions(additionalCodeSystems, newDependantVersion);
 
-			logger.info("Running post upgrade integrity check on {}", branchPath);
-			Branch extensionBranch = branchService.findLatest(branchPath);
-			IntegrityIssueReport integrityReport = integrityService.findChangedComponentsWithBadIntegrityNotFixed(extensionBranch);
-			logger.info("Completed post upgrade integrity check on {}", branchPath);
+		if (compatibleVersions.isEmpty()) {
+			// No compatible versions found - upgrade is blocked
+			List<String> missingDeps = additionalCodeSystems.stream()
+				.map(CodeSystem::getShortName)
+				.toList();
+			throwUpgradeBlockedException(newDependantVersion, missingDeps, job);
+		}
 
-			logger.info("Running post upgrade metadata update on {}", branchPath);
-			updateBranchMetaData(branchPath, newParentVersion, extensionBranch, integrityReport.isEmpty());
-			if (job != null) {
-				job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.COMPLETED);
-			}
-			upgradedSuccessfully = true;
-		} catch (Exception e) {
-			logger.error("Upgrade on {} failed", branchPath, e);
-			if (job != null) {
-				job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.FAILED);
-				job.setErrorMessage(e.getMessage());
-			}
-			throw e;
-		} finally {
-			// Re-enable daily build
-			if (dailyBuildAvailable) {
-				logger.info("Re-enabling daily build after upgrade.");
-				codeSystem.setDailyBuildAvailable(true);
-				codeSystemRepository.save(codeSystem);
-			}
+		// Check if the requested version is compatible
+		if (!compatibleVersions.contains(newDependantVersion)) {
+			// Requested version not compatible, but there are other compatible versions
+			recommendCompatibleVersion(newDependantVersion, compatibleVersions, additionalCodeSystems, job);
+		}
+	}
 
-			logger.info("Upgrade {} on {}", upgradedSuccessfully?"completed":"unsuccessful", branchPath);
+
+
+
+	private void throwUpgradeBlockedException(Integer newDependantVersion, List<String> missingDependencyCodeSystems, CodeSystemUpgradeJob job) {
+		String errorMessage = String.format("No compatible release found for dependent code system %s with the requested International version %s." +
+						" Please wait for a compatible release before proceeding.",
+				String.join(", ", missingDependencyCodeSystems), newDependantVersion);
+		if (job != null) {
+			job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.FAILED);
+			job.setErrorMessage(errorMessage);
+		}
+		throw new IllegalStateException(errorMessage);
+	}
+
+	private void recommendCompatibleVersion(Integer newDependantVersion, List<Integer> possibleUpgradeVersions, Set<CodeSystem> additionalCodeSystems, CodeSystemUpgradeJob job) {
+		for (Integer possibleVersion : possibleUpgradeVersions) {
+			boolean compatible = additionalCodeSystems.stream().allMatch(additional -> {
+				List<CodeSystemVersion> depVersions = codeSystemService.findAllVersions(additional.getShortName(), true, true);
+				depVersions.forEach(codeSystemVersionService::populateDependantVersion);
+				return depVersions.stream()
+						.map(CodeSystemVersion::getDependantVersionEffectiveTime)
+						.anyMatch(depIntVersion -> depIntVersion != null && depIntVersion.equals(possibleVersion));
+			});
+			if (compatible) {
+				String errorMessage = String.format("Version %s of the International release isn’t compatible with all additional dependencies. " +
+						"Try upgrading to %s, which is fully compatible.", newDependantVersion, possibleVersion);
+				if (job != null) {
+					job.setStatus(CodeSystemUpgradeJob.UpgradeStatus.FAILED);
+					job.setErrorMessage(errorMessage);
+				}
+				throw new IllegalStateException(errorMessage);
+			}
 		}
 	}
 
@@ -264,4 +355,14 @@ public class CodeSystemUpgradeService {
 			}
 		}
 	}
+
+	record UpgradePreCheckResult(CodeSystemVersion newParentVersion, CodeSystem parentCodeSystem) {
+    public CodeSystemVersion getNewParentVersion() {
+        return newParentVersion;
+    }
+
+    public CodeSystem getParentCodeSystem() {
+        return parentCodeSystem;
+    }
+}
 }

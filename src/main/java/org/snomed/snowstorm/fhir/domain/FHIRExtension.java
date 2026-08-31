@@ -45,27 +45,26 @@ public class FHIRExtension {
 		Extension extension = new Extension();
 		extension.setUrl(uri);
 		Optional.ofNullable(getType(value, type))
-				.ifPresentOrElse(extension::setValue, () ->{
-					orEmpty(extensions).forEach( fhirExtension -> {
-						extension.addExtension(fhirExtension.getHapi());
-					});
-
-		});
+				.ifPresentOrElse(extension::setValue, () ->
+					orEmpty(extensions).forEach(fhirExtension -> extension.addExtension(fhirExtension.getHapi()))
+		);
 		return extension;
 	}
 	public static Type getType(String primitiveValue, String fhirType){
-		if (fhirType == null) return null;
-        return switch (fhirType) {
-            case "integer" -> new IntegerType(primitiveValue);
-            case "boolean" -> new BooleanType(primitiveValue);
-            case "string" -> new StringType(primitiveValue);
-            case "decimal" -> new DecimalType(primitiveValue);
+		if (fhirType == null) {
+			return null;
+		}
+		return switch (fhirType) {
+			case "integer" -> new IntegerType(primitiveValue);
+			case "boolean" -> new BooleanType(primitiveValue);
+			case "string" -> new StringType(primitiveValue);
+			case "decimal" -> new DecimalType(primitiveValue);
 			case "id" -> new IdType(primitiveValue);
 			case "canonical" -> new CanonicalType(primitiveValue);
 			case "code" -> new CodeType(primitiveValue);
-            default -> null;
-        };
-    }
+			default -> null;
+		};
+	}
 
 	public String getUri() {
 		return uri;

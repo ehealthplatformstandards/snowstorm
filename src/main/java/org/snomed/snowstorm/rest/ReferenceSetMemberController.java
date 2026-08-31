@@ -62,6 +62,8 @@ public class ReferenceSetMemberController {
 			@PathVariable String branch,
 			@Parameter(description = "A reference set identifier or ECL expression can be used to limit the reference sets searched. Example: <723564002")
 			@RequestParam(required = false) String referenceSet,
+			@Parameter(description = "A reference set type identifier or ECL expression can be used to limit the reference set types searched. A concept identifier includes descendants. Example: 446609009")
+			@RequestParam(required = false) String refsetType,
 			@Parameter(description = "A concept identifier or ECL expression can be used to limit the modules searched. Example: <900000000000445007")
 			@RequestParam(required = false) String module,
 			@Parameter(description = "Set of referencedComponentId ids to limit search")
@@ -81,6 +83,7 @@ public class ReferenceSetMemberController {
 		MemberSearchRequest searchRequest = new MemberSearchRequest()
 				.active(active)
 				.referenceSet(referenceSet)
+				.refsetType(refsetType)
 				.module(module)
 				.referencedComponentIds(referencedComponentId);
 		PageWithBucketAggregations<ReferenceSetMember> page = memberService.findReferenceSetMembersWithAggregations(branch, pageRequest, searchRequest);
@@ -296,7 +299,7 @@ public class ReferenceSetMemberController {
 
 	@Operation(summary = "Delete a reference set member.")
 	@DeleteMapping(value = "/{branch}/members/{uuid}")
-	@PreAuthorize("hasPermission('AUTHOR', #branch)")
+	@PreAuthorize("hasPermission('ADMIN', #branch) || (hasPermission('AUTHOR', #branch) && !#force)")
 	@JsonView(value = View.Component.class)
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void deleteMember(
@@ -310,7 +313,7 @@ public class ReferenceSetMemberController {
 
 	@Operation(summary = "Batch delete reference set members.")
 	@DeleteMapping(value = "/{branch}/members")
-	@PreAuthorize("hasPermission('AUTHOR', #branch)")
+	@PreAuthorize("hasPermission('ADMIN', #branch) || (hasPermission('AUTHOR', #branch) && !#force)")
 	@JsonView(value = View.Component.class)
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void deleteMembers(

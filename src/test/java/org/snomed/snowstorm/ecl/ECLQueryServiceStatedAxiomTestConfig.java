@@ -15,7 +15,8 @@ import java.util.HashSet;
 import java.util.List;
 
 import static io.kaicode.elasticvc.domain.Branch.MAIN;
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.snomed.otf.owltoolkit.constants.Concepts.LATERALITY;
 import static org.snomed.snowstorm.TestConcepts.*;
 import static org.snomed.snowstorm.core.data.domain.Concepts.*;
 

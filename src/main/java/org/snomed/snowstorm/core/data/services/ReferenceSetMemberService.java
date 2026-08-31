@@ -204,6 +204,13 @@ public class ReferenceSetMemberService extends ComponentService {
 			List<Long> conceptIds = getConceptIds(branchCriteria, referenceSet);
 			builder.must(termsQuery(ReferenceSetMember.Fields.REFSET_ID, conceptIds));
 		}
+		String refsetType = searchRequest.getRefsetType();
+		if (!Strings.isNullOrEmpty(refsetType)) {
+			// A SCTID is treated as a type: include the type itself and all descendant reference sets
+			String conceptIdOrECL = refsetType.matches("\\d+") ? "<<" + refsetType : refsetType;
+			List<Long> conceptIds = getConceptIds(branchCriteria, conceptIdOrECL);
+			builder.must(termsQuery(ReferenceSetMember.Fields.REFSET_ID, conceptIds));
+		}
 		String module = searchRequest.getModule();
 		if (!Strings.isNullOrEmpty(module)) {
 			List<Long> conceptIds = getConceptIds(branchCriteria, module);
@@ -460,7 +467,7 @@ public class ReferenceSetMemberService extends ComponentService {
 						.withQuery(bool(b -> b
 								.must(termsQuery(Description.Fields.DESCRIPTION_ID, descriptionIdsSegment))
 								.must(versionControlHelper.getBranchCriteriaIncludingOpenCommit(commit).getEntityBranchCriteria(Description.class))))
-						.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.CONCEPT_ID, Description.Fields.DESCRIPTION_ID}, null))
+						.withSourceFilter(new FetchSourceFilter(null, new String[]{Description.Fields.CONCEPT_ID, Description.Fields.DESCRIPTION_ID}, null))
 						.withPageable(LARGE_PAGE);
 				try (final SearchHitsIterator<Description> descriptions = elasticsearchOperations.searchForStream(queryBuilder.build(), Description.class)) {
 					descriptions.forEachRemaining(description ->
@@ -508,7 +515,7 @@ public class ReferenceSetMemberService extends ComponentService {
 			}
 			String[] fieldsToInclude = new String[elasticFieldNames.size()];
 			elasticFieldNames.toArray(fieldsToInclude);
-			queryBuilder.withSourceFilter(new FetchSourceFilter(fieldsToInclude, null));
+			queryBuilder.withSourceFilter(new FetchSourceFilter(null, fieldsToInclude, null));
 		}
 
 		NativeQuery query = queryBuilder.build();
@@ -536,7 +543,7 @@ public class ReferenceSetMemberService extends ComponentService {
 		// Build search query
 		NativeQuery query = new NativeQueryBuilder()
 				.withQuery(memberQueryBuilder.build()._toQuery())
-				.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{ReferenceSetMember.Fields.REFERENCED_COMPONENT_ID}, null))
 				.withSort(SortOptions.of(s -> s.field(f -> f.field("_doc"))))// Fastest unordered sort
 				.withPageable(LARGE_PAGE)
 				.build();

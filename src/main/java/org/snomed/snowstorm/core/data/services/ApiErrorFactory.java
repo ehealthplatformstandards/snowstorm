@@ -3,69 +3,62 @@ package org.snomed.snowstorm.core.data.services;
 import org.snomed.snowstorm.core.data.domain.ConceptMini;
 import org.snomed.snowstorm.core.data.services.pojo.IntegrityIssueReport;
 
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ApiErrorFactory {
 
-	static ApiError createErrorForMergeConflicts(String message, IntegrityIssueReport integrityIssueReport) {
-		PersistedIntegrityIssueReport report = new PersistedIntegrityIssueReport();
-		report.setRelationshipsWithMissingOrInactiveDestination(integrityIssueReport.getRelationshipsWithMissingOrInactiveDestination());
-		report.setRelationshipsWithMissingOrInactiveSource(integrityIssueReport.getRelationshipsWithMissingOrInactiveSource());
-		report.setRelationshipsWithMissingOrInactiveType(integrityIssueReport.getRelationshipsWithMissingOrInactiveType());
-		if (integrityIssueReport.getAxiomsWithMissingOrInactiveReferencedConcept() != null) {
-			Map<String, Long> axiomsWithMissingOrInactiveReferencedConcept = new HashMap<>();
-			for (Map.Entry<String, ConceptMini> entry : integrityIssueReport.getAxiomsWithMissingOrInactiveReferencedConcept().entrySet()) {
-				axiomsWithMissingOrInactiveReferencedConcept.put(entry.getKey(), entry.getValue().getConceptIdAsLong());
-			}
-			report.setAxiomsWithMissingOrInactiveReferencedConcept(axiomsWithMissingOrInactiveReferencedConcept);
-		} else {
-			report.setAxiomsWithMissingOrInactiveReferencedConcept(null);
-		}
+	static final String INTEGRITY_CHECK_DEVELOPER_MESSAGE = "The integrity check API can be used here.";
 
-		Map <String, Object> info = new HashMap <>();
-		info.put("integrityIssues", report);
-		return new ApiError(message, "The integrity check API can be used here.", info);
+	static ApiError createErrorForMergeConflicts(String message) {
+		return new ApiError(message, INTEGRITY_CHECK_DEVELOPER_MESSAGE);
 	}
 
-	private static class PersistedIntegrityIssueReport {
+	static ApiError createErrorForMergeConflicts(String message, IntegrityIssueReport integrityIssueReport) {
+		// Use only plain Maps (no custom types) so ApiError JSON round-trips cleanly for ES storage.
+		Map<String, Object> report = new LinkedHashMap<>();
+		report.put("relationshipsWithMissingOrInactiveDestination",
+				toStringKeyedMap(integrityIssueReport.getRelationshipsWithMissingOrInactiveDestination()));
+		report.put("relationshipsWithMissingOrInactiveSource",
+				toStringKeyedMap(integrityIssueReport.getRelationshipsWithMissingOrInactiveSource()));
+		report.put("relationshipsWithMissingOrInactiveType",
+				toStringKeyedMap(integrityIssueReport.getRelationshipsWithMissingOrInactiveType()));
+		report.put("axiomsWithMissingOrInactiveReferencedConcept",
+				toAxiomConceptIdMap(integrityIssueReport.getAxiomsWithMissingOrInactiveReferencedConcept()));
 
-		private Map<String, Long> axiomsWithMissingOrInactiveReferencedConcept;
-		private Map<Long, Long> relationshipsWithMissingOrInactiveSource;
-		private Map<Long, Long> relationshipsWithMissingOrInactiveType;
-		private Map<Long, Long> relationshipsWithMissingOrInactiveDestination;
+		Map<String, Object> info = new HashMap<>();
+		info.put("integrityIssues", report);
+		return new ApiError(message, INTEGRITY_CHECK_DEVELOPER_MESSAGE, info);
+	}
 
-
-		public Map<String, Long> getAxiomsWithMissingOrInactiveReferencedConcept() {
-			return axiomsWithMissingOrInactiveReferencedConcept;
+	/**
+	 * Elasticsearch/Jackson cannot reliably persist maps with Long keys (including fastutil Long2LongOpenHashMap).
+	 * JSON object keys are strings anyway, so convert before storing on BranchMergeJob.
+	 */
+	private static Map<String, Long> toStringKeyedMap(Map<Long, Long> map) {
+		if (map == null || map.isEmpty()) {
+			return Collections.emptyMap();
 		}
-
-		public void setAxiomsWithMissingOrInactiveReferencedConcept(Map<String, Long> axiomsWithMissingOrInactiveReferencedConcept) {
-			this.axiomsWithMissingOrInactiveReferencedConcept = axiomsWithMissingOrInactiveReferencedConcept;
+		Map<String, Long> result = new LinkedHashMap<>();
+		for (Map.Entry<Long, Long> entry : map.entrySet()) {
+			if (entry.getKey() != null) {
+				result.put(entry.getKey().toString(), entry.getValue());
+			}
 		}
+		return result;
+	}
 
-		public Map<Long, Long> getRelationshipsWithMissingOrInactiveSource() {
-			return relationshipsWithMissingOrInactiveSource;
+	private static Map<String, Long> toAxiomConceptIdMap(Map<String, ConceptMini> axioms) {
+		if (axioms == null || axioms.isEmpty()) {
+			return Collections.emptyMap();
 		}
-
-		public void setRelationshipsWithMissingOrInactiveSource(Map<Long, Long> relationshipsWithMissingOrInactiveSource) {
-			this.relationshipsWithMissingOrInactiveSource = relationshipsWithMissingOrInactiveSource;
+		Map<String, Long> result = new LinkedHashMap<>();
+		for (Map.Entry<String, ConceptMini> entry : axioms.entrySet()) {
+			ConceptMini conceptMini = entry.getValue();
+			result.put(entry.getKey(), conceptMini != null ? conceptMini.getConceptIdAsLong() : null);
 		}
-
-		public Map<Long, Long> getRelationshipsWithMissingOrInactiveType() {
-			return relationshipsWithMissingOrInactiveType;
-		}
-
-		public void setRelationshipsWithMissingOrInactiveType(Map<Long, Long> relationshipsWithMissingOrInactiveType) {
-			this.relationshipsWithMissingOrInactiveType = relationshipsWithMissingOrInactiveType;
-		}
-
-		public Map<Long, Long> getRelationshipsWithMissingOrInactiveDestination() {
-			return relationshipsWithMissingOrInactiveDestination;
-		}
-
-		public void setRelationshipsWithMissingOrInactiveDestination(Map<Long, Long> relationshipsWithMissingOrInactiveDestination) {
-			this.relationshipsWithMissingOrInactiveDestination = relationshipsWithMissingOrInactiveDestination;
-		}
+		return result;
 	}
 }

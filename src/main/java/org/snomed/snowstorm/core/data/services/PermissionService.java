@@ -1,6 +1,7 @@
 package org.snomed.snowstorm.core.data.services;
 
 import io.kaicode.elasticvc.domain.Branch;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.core.data.domain.security.PermissionRecord;
@@ -11,13 +12,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jms.core.JmsTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
 import java.util.*;
 
 @Service
@@ -41,6 +42,15 @@ public class PermissionService {
 
 	@Value("${ims-security.roles.enabled}")
 	private boolean rolesEnabled;
+
+	@Value("${snowstorm.branch-change.message.enabled}" )
+	private boolean jmsMessageEnabled;
+
+	@Value("${jms.queue.prefix}")
+	private String jmsQueuePrefix;
+
+	@Autowired
+	private JmsTemplate jmsTemplate;
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
@@ -166,6 +176,12 @@ public class PermissionService {
 			final Optional<PermissionRecord> byGlobalPathAndRole = findByGlobalPathAndRole(global, branch, role);
 			byGlobalPathAndRole.ifPresent(record -> repository.delete(record));
 			permissionServiceCache.clearCache();
+		}
+
+		if (jmsMessageEnabled) {
+			Map<String, String> jmsObject = new HashMap<>();
+			jmsObject.put("branch", branch);
+			jmsTemplate.convertAndSend(jmsQueuePrefix + ".role.change", jmsObject);
 		}
 	}
 

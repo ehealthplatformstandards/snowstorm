@@ -71,7 +71,7 @@ public class MRCMUpdateService extends ComponentService implements CommitListene
 	@Override
 	public void preCommitCompletion(Commit commit) {
 		if (BranchMetadataHelper.isImportingCodeSystemVersion(commit)) {
-			logger.info("MRCM auto update is disabled on branch {}", commit.getBranch().getPath());
+			logger.debug("MRCM auto update is disabled on branch {}", commit.getBranch().getPath());
 			return;
 		}
 		if (commit.getCommitType() == CONTENT || commit.getCommitType() == REBASE) {
@@ -253,7 +253,7 @@ public class MRCMUpdateService extends ComponentService implements CommitListene
 						)
 				)
 				.withPageable(LARGE_PAGE)
-				.withSourceFilter(new FetchSourceFilter(new String[]{ReferenceSetMember.Fields.MEMBER_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{ReferenceSetMember.Fields.MEMBER_ID}, null))
 				.build(), ReferenceSetMember.class)) {
 			mrcmMembers.forEachRemaining(hit -> result.add(hit.getContent().getMemberId()));
 		}

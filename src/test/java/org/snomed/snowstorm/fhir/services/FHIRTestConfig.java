@@ -22,7 +22,7 @@ import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.snomed.snowstorm.core.data.domain.Concepts.REFSET_MRCM_ATTRIBUTE_RANGE_INTERNATIONAL;
 import static org.snomed.snowstorm.fhir.services.AbstractFHIRTest.*;
 
@@ -65,6 +65,19 @@ public class FHIRTestConfig extends TestConfig {
 		for (int x=1; x<=10; x++) {
 			createDummyConcepts(x, concepts, false);
 		}
+		concepts.add(new Concept("900000000000455006")
+				.addRelationship(new Relationship(Concepts.ISA, Concepts.SNOMEDCT_ROOT))
+				.addDescription(new Description("Reference set (foundation metadata concept)").setTypeId(Concepts.FSN)
+						.addLanguageRefsetMember(Concepts.US_EN_LANG_REFSET, Concepts.PREFERRED))
+				.addDescription(new Description("Reference set").setTypeId(Concepts.SYNONYM)
+						.addLanguageRefsetMember(Concepts.US_EN_LANG_REFSET, Concepts.PREFERRED)));
+		concepts.add(new Concept(Concepts.OWL_AXIOM_REFERENCE_SET)
+				.addRelationship(new Relationship(Concepts.ISA, "900000000000455006"))
+				.addDescription(new Description("OWL axiom reference set (foundation metadata concept)").setTypeId(Concepts.FSN)
+						.addLanguageRefsetMember(Concepts.US_EN_LANG_REFSET, Concepts.PREFERRED))
+				.addDescription(new Description("OWL axiom reference set").setTypeId(Concepts.SYNONYM)
+						.addLanguageRefsetMember(Concepts.US_EN_LANG_REFSET, Concepts.PREFERRED)));
+		concepts.add(new Concept("27624003")); // chronic disease — referenced in ECL test fixtures
 		branchService.create(MAIN);
 		concepts.add(new Concept(sampleInactiveSCTID).setActive(false));
 		conceptService.batchCreate(concepts, MAIN);

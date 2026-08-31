@@ -6,15 +6,11 @@ import ca.uhn.fhir.jpa.term.TermLoaderSvcImpl;
 import ca.uhn.fhir.jpa.term.api.ITermLoaderSvc;
 import ca.uhn.fhir.rest.annotation.*;
 import ca.uhn.fhir.rest.api.MethodOutcome;
-import ca.uhn.fhir.rest.api.PatchTypeEnum;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
 import ca.uhn.fhir.rest.param.QuantityParam;
 import ca.uhn.fhir.rest.param.StringParam;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hl7.fhir.instance.model.api.IBaseParameters;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.instance.model.api.ICompositeType;
@@ -23,25 +19,19 @@ import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.jetbrains.annotations.NotNull;
 import org.snomed.snowstorm.core.data.domain.Concept;
-import org.snomed.snowstorm.core.data.domain.Description;
 import org.snomed.snowstorm.core.data.services.CodeSystemService;
 import org.snomed.snowstorm.core.data.services.MultiSearchService;
 import org.snomed.snowstorm.core.data.services.ServiceException;
-import org.snomed.snowstorm.core.data.services.postcoordination.ExpressionValidationException;
-import org.snomed.snowstorm.core.data.services.postcoordination.model.ComparableExpression;
-import org.snomed.snowstorm.core.data.services.postcoordination.model.PostCoordinatedExpression;
 import org.snomed.snowstorm.core.pojo.LanguageDialect;
 import org.snomed.snowstorm.fhir.config.FHIRConstants;
 import org.snomed.snowstorm.fhir.domain.FHIRCodeSystemVersion;
 import org.snomed.snowstorm.fhir.domain.FHIRConcept;
+import org.snomed.snowstorm.fhir.domain.FHIRDesignation;
+import org.snomed.snowstorm.fhir.domain.FHIRExtension;
+import org.snomed.snowstorm.fhir.domain.FHIRProperty;
 import org.snomed.snowstorm.fhir.domain.SearchFilter;
-import org.snomed.snowstorm.fhir.domain.SubsumesResult;
 import org.snomed.snowstorm.fhir.pojo.ConceptAndSystemResult;
 import org.snomed.snowstorm.fhir.pojo.FHIRCodeSystemVersionParams;
-import org.snomed.snowstorm.fhir.pojo.PatchCode;
-import org.snomed.snowstorm.fhir.pojo.PatchOperation;
-import org.snomed.snowstorm.syndication.services.importers.fixedversion.ucum.UcumCodeValidationService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -50,6 +40,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.RequestMethod;
 
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -58,52 +49,45 @@ import static java.lang.String.format;
 import static java.util.stream.Stream.concat;
 import static org.snomed.snowstorm.fhir.services.FHIRCodeSystemService.SCT_ID_PREFIX;
 import static org.snomed.snowstorm.fhir.services.FHIRHelper.*;
+import static org.snomed.snowstorm.fhir.services.FHIRValueSetService.TX_ISSUE_TYPE;
 
 @Component
-public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants {
+public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants, TxResourceAware {
 
 	private static final String PARAM_SYSTEM = "system";
 	private static final String PARAM_FILE = "file";
-	private static final String EXAMPLE_SNOMEDCT_PATCH = "[ { \"op\": \"add\", \"path\": \"/concept\", \"value\": { \"code\": \"POSTCOORDINATED_EXPRESSION\" } } ]";
+	private static final String PARAM_DISPLAY = "display";
+	private static final String PARAM_ISSUES = "issues";
 
 	@Value("${snowstorm.rest-api.readonly}")
 	private boolean readOnlyMode;
 
-	@Autowired
-	private FHIRLoadPackageService loadPackageService;
+	private final FhirContext fhirContext;
 
-	@Autowired
-	private FhirContext fhirContext;
+	private final FHIRCodeSystemService fhirCodeSystemService;
 
-	@Autowired
-	private FHIRCodeSystemService fhirCodeSystemService;
+	private final MultiSearchService snomedMultiSearchService;
 
-	@Autowired
-	private CodeSystemService snomedCodeSystemService;
+	private final FHIRGraphService graphService;
 
-	@Autowired
-	private MultiSearchService snomedMultiSearchService;
+	private final HapiParametersMapper pMapper;
 
-	@Autowired
-	private FHIRGraphService graphService;
+	private final FHIRHelper fhirHelper;
 
-	@Autowired
-	private HapiParametersMapper pMapper;
+	private final FHIRTermCodeSystemStorage termCodeSystemStorage;
 
-	@Autowired
-	private FHIRHelper fhirHelper;
+	private final FHIRConceptService fhirConceptService;
 
-	@Autowired
-	private FHIRTermCodeSystemStorage termCodeSystemStorage;
-
-	@Autowired
-	private FHIRConceptService fhirConceptService;
-
-	@Autowired
-	private ObjectMapper objectMapper;
-
-	@Autowired
-	private UcumCodeValidationService ucumCodeValidationService;
+	public FHIRCodeSystemProvider(FhirContext fhirContext, FHIRCodeSystemService fhirCodeSystemService, MultiSearchService snomedMultiSearchService, FHIRGraphService graphService, HapiParametersMapper pMapper, FHIRHelper fhirHelper, FHIRTermCodeSystemStorage termCodeSystemStorage, FHIRConceptService fhirConceptService) {
+		this.fhirContext = fhirContext;
+		this.fhirCodeSystemService = fhirCodeSystemService;
+		this.snomedMultiSearchService = snomedMultiSearchService;
+		this.graphService = graphService;
+		this.pMapper = pMapper;
+		this.fhirHelper = fhirHelper;
+		this.termCodeSystemStorage = termCodeSystemStorage;
+		this.fhirConceptService = fhirConceptService;
+	}
 
 	private static final String[] defaultSortOrder = new String[] { "title", "-date" };
 
@@ -189,51 +173,40 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 				sortOn.stream().map(comparatorMap::get).reduce(Comparator::thenComparing).orElseGet(() -> Comparator.comparing(CodeSystem::getId));
 
 		Stream<CodeSystem> snomedCodeSystemStream = snomedMultiSearchService.getAllPublishedVersions().stream()
+				.filter(codeSystemVersion -> !CodeSystemService.isEmpty2000Version(codeSystemVersion))
 				.map(snomedSystemVersion -> new FHIRCodeSystemVersion(snomedSystemVersion).toHapiCodeSystem());
-
-		Stream<CodeSystem> snomedPostcoordinatedStream = snomedCodeSystemService.findAllPostcoordinatedBrief().stream()
-				.map(snomedSystem -> new FHIRCodeSystemVersion(snomedSystem).toHapiCodeSystem());
 
 		Stream<CodeSystem> fhirCodeSystemStream = StreamSupport.stream(fhirCodeSystemService.findAll().spliterator(), false)
 				.map(FHIRCodeSystemVersion::toHapiCodeSystem);
 
-		return concat(concat(snomedCodeSystemStream, fhirCodeSystemStream), snomedPostcoordinatedStream)
+		return concat(snomedCodeSystemStream, fhirCodeSystemStream)
 				.filter(cs -> csFilter.apply(cs, fhirHelper))
 				.sorted(chainedComparator)
 				.toList();
 	}
 
-	@Read
+	@Read()
 	public CodeSystem getCodeSystem(@IdParam IdType id) {
-		return getFhirCodeSystemVersionOrThrow(id.getIdPart()).toHapiCodeSystem();
-	}
-
-	@NotNull
-	private FHIRCodeSystemVersion getFhirCodeSystemVersionOrThrow(String idPart) {
-		FHIRCodeSystemVersion fhirCodeSystemVersion = null;
+		String idPart = id.getIdPart();
 		if (!idPart.startsWith(SCT_ID_PREFIX)) {
 			Optional<FHIRCodeSystemVersion> fhirCodeSystem = fhirCodeSystemService.findById(idPart);
 			if (fhirCodeSystem.isPresent()) {
-				fhirCodeSystemVersion = fhirCodeSystem.get();
+				return fhirCodeSystem.get().toHapiCodeSystem();
 			}
 		} else {
-			Stream<FHIRCodeSystemVersion> snomedPublished = snomedMultiSearchService.getAllPublishedVersions().stream()
-					.map(FHIRCodeSystemVersion::new);
-			Stream<FHIRCodeSystemVersion> snomedPostcoordinated = snomedCodeSystemService.findAllPostcoordinatedBrief().stream()
-					.map(FHIRCodeSystemVersion::new);
+			Stream<CodeSystem> snomedPublished = snomedMultiSearchService.getAllPublishedVersions().stream()
+					.filter(codeSystemVersion -> !CodeSystemService.isEmpty2000Version(codeSystemVersion))
+					.map(cv -> new FHIRCodeSystemVersion(cv).toHapiCodeSystem());
 
-			Optional<FHIRCodeSystemVersion> snomedCodeSystem = Stream.concat(snomedPublished, snomedPostcoordinated)
+			Optional<CodeSystem> snomedCodeSystem = snomedPublished
 					.filter(cs -> cs.getId().equals(idPart))
 					.findAny();
 
 			if (snomedCodeSystem.isPresent()) {
-				fhirCodeSystemVersion = snomedCodeSystem.get();
+				return snomedCodeSystem.get();
 			}
 		}
-		if (fhirCodeSystemVersion == null) {
-			throw FHIRHelper.exception("Code System " + idPart + " not found", IssueType.NOTFOUND, 404);
-		}
-		return fhirCodeSystemVersion;
+		throw FHIRHelper.exception("Code System " + idPart + " not found", IssueType.NOTFOUND, 404);
 	}
 
 	@Create
@@ -251,72 +224,11 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 	@NotNull
 	private MethodOutcome doCreateUpdate(CodeSystem codeSystem) throws ServiceException {
 		FHIRHelper.readOnlyCheck(readOnlyMode);
+
 		MethodOutcome outcome = new MethodOutcome();
 		FHIRCodeSystemVersion codeSystemVersion = fhirCodeSystemService.createUpdate(codeSystem);
 		outcome.setId(new IdType("CodeSystem", codeSystemVersion.getId(), codeSystemVersion.getVersion()));
 		return outcome;
-	}
-
-	@Patch
-	public MethodOutcome addConcept(@IdParam IdType id, PatchTypeEnum patchType, @ResourceParam String thePatchBody) {
-		FHIRHelper.readOnlyCheck(readOnlyMode);
-		FHIRCodeSystemVersion codeSystemVersion = getFhirCodeSystemVersionOrThrow(id.getIdPart());
-		if (codeSystemVersion.getSnomedCodeSystem() != null && !codeSystemVersion.getSnomedCodeSystem().isPostcoordinatedNullSafe()) {
-			throw exception("Only SNOMED CT CodeSystem supplements can be patched.", IssueType.INVARIANT, 400);
-		}
-
-		List<String> expressionStrings = new ArrayList<>();
-		try {
-			TypeReference<List<PatchOperation>> valueTypeRef = new TypeReference<>() {};
-			List<PatchOperation> patchOperations = objectMapper.readValue(thePatchBody, valueTypeRef);
-			for (PatchOperation patchOperation : patchOperations) {
-				if (!"add".equals(patchOperation.getOp()) || !"/concept".equals(patchOperation.getPath())) {
-					throw exception("The only supported patch operation uses this format: " + EXAMPLE_SNOMEDCT_PATCH, IssueType.INVARIANT, 400);
-				}
-				PatchCode value = patchOperation.getValue();
-				if (value == null || value.getCode() == null || value.getCode().isEmpty()) {
-					throw exception("The code is missing from request.", IssueType.INVARIANT, 400);
-				}
-				if (value.getDisplay() != null) {
-					throw exception("Display terms are not yet supported.", IssueType.NOTSUPPORTED, 400);
-				}
-				expressionStrings.add(value.getCode());
-			}
-		} catch (JsonProcessingException e) {
-			throw exception("Failed to read patch body. The only supported patch operation uses this format: " + EXAMPLE_SNOMEDCT_PATCH, IssueType.INVARIANT, 400);
-		}
-
-		if (expressionStrings.isEmpty()) {
-			return new MethodOutcome();
-		}
-
-		List<PostCoordinatedExpression> expressions = fhirCodeSystemService.addExpressions(codeSystemVersion, expressionStrings);
-
-		CodeSystem savedCodeSystem = new CodeSystem();
-		for (PostCoordinatedExpression expression : expressions) {
-			CodeSystem.ConceptDefinitionComponent conceptDefinitionComponent = new CodeSystem.ConceptDefinitionComponent()
-					.setCode(expression.getCloseToUserForm().replace(" ", ""))
-					.addProperty(new CodeSystem.ConceptPropertyComponent(new CodeType("alternateIdentifier"), new StringType(expression.getId())));
-
-				conceptDefinitionComponent
-					.addProperty(new CodeSystem.ConceptPropertyComponent(
-							new CodeType("humanReadableClassifiableForm"), new StringType(expression.getHumanReadableClassifiableForm())));
-			if (expression.getHumanReadableNecessaryNormalForm() != null) {
-				conceptDefinitionComponent
-					.addProperty(new CodeSystem.ConceptPropertyComponent(
-							new CodeType("humanReadableNecessaryNormalForm"), new StringType(expression.getHumanReadableNecessaryNormalForm())));
-			}
-			ComparableExpression nnf = expression.getNecessaryNormalFormExpression();
-			if (nnf != null && nnf.getEquivalentConcepts() != null) {
-				for (Long equivalentConcept : nnf.getEquivalentConcepts()) {
-					conceptDefinitionComponent
-							.addProperty(new CodeSystem.ConceptPropertyComponent(
-									new CodeType("equivalentConcept"), new StringType(equivalentConcept.toString())));
-				}
-			}
-			savedCodeSystem.addConcept(conceptDefinitionComponent);
-		}
-		return new MethodOutcome().setResource(savedCodeSystem);
 	}
 
 	@Delete
@@ -343,12 +255,12 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 			@OperationParam(name="displayLanguage") String displayLanguage,
 			@OperationParam(name="property") List<CodeType> propertiesType ) {
 
-		mutuallyExclusive("code", code, "coding", coding);
+		mutuallyExclusive(CODE, code, CODING, coding);
 		notSupported("date", date);
-		FHIRCodeSystemVersionParams codeSystemVersion = getCodeSystemVersionParams(system, version, coding);
+		FHIRCodeSystemVersionParams codeSystemVersion = FHIRHelper.getCodeSystemVersionParams(system, version, coding);
 		return lookup(codeSystemVersion, fhirHelper.recoverCode(code, coding), displayLanguage, request.getHeader(ACCEPT_LANGUAGE_HEADER), propertiesType);
 	}
-	
+
 	@Operation(name="$lookup", idempotent=true)
 	public Parameters lookupInstance(
 			@IdParam IdType id,
@@ -362,14 +274,14 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 			@OperationParam(name="displayLanguage") String displayLanguage,
 			@OperationParam(name="property") List<CodeType> propertiesType ) {
 
-		mutuallyExclusive("code", code, "coding", coding);
-		notSupported("date", date);
-		notSupported("system", system, " when id is already specified in the URL.");
-		notSupported("version", version, " when id is already specified in the URL.");
+		mutuallyExclusive(CODE, code, CODING, coding);
+		notSupported(DATE, date);
+		notSupported(PARAM_SYSTEM, system, " when id is already specified in the URL.");
+		notSupported(VERSION, version, " when id is already specified in the URL.");
 		FHIRCodeSystemVersionParams codeSystemVersion = getCodeSystemVersionParams(id, system, version, coding);
 		return lookup(codeSystemVersion, fhirHelper.recoverCode(code, coding), displayLanguage, request.getHeader(ACCEPT_LANGUAGE_HEADER), propertiesType);
 	}
-	
+
 	private Parameters lookup(
 			FHIRCodeSystemVersionParams codeSystemParams,
 			String code,
@@ -381,12 +293,13 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 		fhirHelper.setLanguageOptions(designations, displayLanguage, acceptLanguageHeader);
 		if (codeSystemParams.isSnomed()) {
 			ConceptAndSystemResult conceptAndSystemResult = fhirCodeSystemService.findSnomedConcept(code, designations, codeSystemParams);
+			Concept concept = conceptAndSystemResult.concept();
 			FHIRCodeSystemVersion codeSystemVersion = conceptAndSystemResult.codeSystemVersion();
-			if (conceptAndSystemResult.concept() == null) {
+			if (concept == null) {
 				throw exception(format("Code '%s' not found for system '%s'.", code, codeSystemVersion.getUrl()), IssueType.NOTFOUND, 404);
 			}
 
-			List<String> childIds = conceptAndSystemResult.postcoordinated() ? Collections.emptyList() : graphService.findChildren(code, codeSystemVersion, LARGE_PAGE);
+			List<String> childIds = graphService.findChildren(code, codeSystemVersion, LARGE_PAGE);
 			Set<FhirSctProperty> properties = FhirSctProperty.parse(propertiesType);
 			return pMapper.mapToFHIR(conceptAndSystemResult, childIds, properties, designations);
 		} else {
@@ -405,9 +318,10 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 			HttpServletResponse response,
 			@ResourceParam String rawBody,
 			@OperationParam(name="url") UriType url,
+			@OperationParam(name="system") UriType system,
 			@OperationParam(name="codeSystem") StringType codeSystem,
 			@OperationParam(name="code") CodeType code,
-			@OperationParam(name="display") String display,
+			@OperationParam(name=PARAM_DISPLAY) String display,
 			@OperationParam(name="version") StringType version,
 			@OperationParam(name="date") DateTimeType date,
 			@OperationParam(name="coding") Coding coding,
@@ -416,16 +330,23 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 		notSupported("codeSystem", codeSystem);
 		notSupported("date", date);
 		mutuallyExclusive("code", code, "coding", coding);
-		mutuallyRequired("display", display, "code", code, "coding", coding);
+		mutuallyRequired(PARAM_DISPLAY, display, "code", code, "coding", coding);
 		if (request.getMethod().equals(RequestMethod.POST.name())) {
 			// HAPI doesn't populate the OperationParam values for POST, we parse the body instead.
 			List<Parameters.ParametersParameterComponent> parsed = fhirContext.newJsonParser().parseResource(Parameters.class, rawBody).getParameter();
-			FHIRHelper.handleTxResources(loadPackageService,parsed);
+			TxResourceContext.set(FHIRHelper.extractTxResources(parsed));
 		}
-		FHIRCodeSystemVersionParams codeSystemParams = getCodeSystemVersionParams(null, url, version, coding);
-		return validateCode(codeSystemParams, fhirHelper.recoverCode(code, coding), display, request.getHeader(ACCEPT_LANGUAGE_HEADER));
+		try {
+            // Accept 'system' as an alias for 'url' (used by some clients for CodeSystem/$validate-code)
+            UriType resolvedUrl = url != null ? url : system;
+            FHIRCodeSystemVersionParams codeSystemParams = getCodeSystemVersionParams(null, resolvedUrl, version, coding);
+            return validateCode(codeSystemParams, fhirHelper.recoverCode(code, coding), display, request.getHeader(ACCEPT_LANGUAGE_HEADER));
+		} finally {
+			TxResourceContext.clear();
+		}
+
 	}
-	
+
 	@Operation(name="$validate-code", idempotent=true)
 	public Parameters validateCodeInstance(
 			@IdParam IdType id,
@@ -434,7 +355,7 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 			@OperationParam(name="url") UriType url,
 			@OperationParam(name="codeSystem") StringType codeSystem,
 			@OperationParam(name="code") CodeType code,
-			@OperationParam(name="display") String display,
+			@OperationParam(name=PARAM_DISPLAY) String display,
 			@OperationParam(name="version") StringType version,
 			@OperationParam(name="date") DateTimeType date,
 			@OperationParam(name="coding") Coding coding,
@@ -443,112 +364,275 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 		FHIRCodeSystemVersionParams codeSystemParams = getCodeSystemVersionParams(id, url, version, coding);
 		return validateCode(codeSystemParams, fhirHelper.recoverCode(code, coding), display, request.getHeader(ACCEPT_LANGUAGE_HEADER));
 	}
-	
+
 	private Parameters validateCode(
 			FHIRCodeSystemVersionParams codeSystemParams,
 			String code,
 			String display,
 			String acceptLanguageHeader) {
-
 		List<LanguageDialect> languageDialects = fhirHelper.getLanguageDialects(null, acceptLanguageHeader);
+
 		if (codeSystemParams.isSnomed()) {
-			ConceptAndSystemResult conceptAndSystemResult = fhirCodeSystemService.findSnomedConcept(code, languageDialects, codeSystemParams);
-			Concept concept = conceptAndSystemResult.concept();
-			FHIRCodeSystemVersion codeSystemVersion = conceptAndSystemResult.codeSystemVersion();
-
-			boolean result = false;
-			String message = conceptAndSystemResult.message();
-			String displayOut = null;
-			if (concept != null) {
-				if (display == null) {
-					result = true;
-				} else {
-					String displayLower = display.toLowerCase();
-					if (concept.getPt().getTerm().toLowerCase().equals(displayLower)) {
-						result = true;
-					} else {
-						for (Description d : concept.getActiveDescriptions()) {
-							if (d.getTerm().toLowerCase().equals(displayLower)) {
-								message = "Display term is acceptable, but not the preferred synonym in the language/dialect specified.";
-								result = true;
-								break;
-							}
-						}
-						if (!result) {
-							message = "Code exists, but the display term is not recognised.";
-						}
-					}
-				}
-				displayOut = concept.getPt().getTerm();
-			} else {
-				message = "The code was not found in the specified code system.";
-				if (conceptAndSystemResult.message() != null) {
-					message = conceptAndSystemResult.message();
-				}
-			}
-			Parameters parameters = new Parameters();
-			parameters.addParameter("result", result);
-			if (concept != null) {
-				parameters.addParameter("inactive", !concept.isActive());
-			}
-			if (message != null) {
-				parameters.addParameter("message", message);
-			}
-			if (displayOut != null) {
-				parameters.addParameter("display", displayOut);
-			}
-			parameters.addParameter("system", codeSystemVersion.getUrl());
-			parameters.addParameter("version", codeSystemVersion.getVersion());
-			return parameters;
-		} else if (codeSystemParams.isUcum()) {
-			return ucumCodeValidationService.validateCode(code, codeSystemParams.getCodeSystem());
-		}
-		else {
-			FHIRCodeSystemVersion codeSystemVersion = null;
-			try {
-				codeSystemVersion = fhirCodeSystemService.findCodeSystemVersionOrThrow(codeSystemParams);
-			} catch(SnowstormFHIRServerResponseException e) {
-				if (isSupplementAsCodeSystemException(e)){
-					Parameters parameters = new Parameters();
-					parameters.addParameter("code", new CodeType(code));
-					parameters.addParameter(new Parameters.ParametersParameterComponent(new StringType("issues")).setResource(e.getOperationOutcome()));
-					parameters.addParameter("message",e.getMessage());
-					parameters.addParameter("result",false);
-					parameters.addParameter("system",new UriType(codeSystemParams.getCodeSystem()));
-					return parameters;
-				} else if(e.getOperationOutcome().getIssue().stream().anyMatch(i -> OperationOutcome.IssueType.NOTFOUND.equals(i.getCode()) && i.getLocation().stream().anyMatch(location -> "Coding.system".equals(location.toString())))){
-					Parameters parameters = new Parameters();
-					parameters.addParameter("code", new CodeType(code));
-					String text = format("A definition for CodeSystem '%s' could not be found, so the code cannot be validated", codeSystemParams.getCodeSystem());
-					OperationOutcome operationOutcome = e.getOperationOutcome();
-					OperationOutcome.OperationOutcomeIssueComponent issue = operationOutcome.getIssue().get(0);
-					issue.setSeverity(OperationOutcome.IssueSeverity.WARNING);
-					issue.getDetails().setText(text);
-					operationOutcome.setIssue(List.of(issue));
-					parameters.addParameter(new Parameters.ParametersParameterComponent(new StringType("issues")).setResource(operationOutcome));
-					parameters.addParameter("message", text);
-					parameters.addParameter("result",true);
-					parameters.addParameter("system",new UriType(codeSystemParams.getCodeSystem()));
-					return parameters;
-				} else {
-					throw e;
-				}
-
-
-			}
-			FHIRConcept concept = fhirConceptService.findConcept(codeSystemVersion, code);
-
-			if (concept != null) {
-				boolean displayValidOrNull = display == null ||
-						display.equals(concept.getDisplay()) ||
-						concept.getDesignations().stream().anyMatch(designation -> display.equals(designation.getValue()));
-
-				return pMapper.validateCodeResponse(concept, displayValidOrNull, codeSystemVersion);
-			} else {
-				return pMapper.resultFalse(code, codeSystemVersion);
-			}
+			return validateSnomedCode(code, display, languageDialects, codeSystemParams);
+		} else {
+			return validateNonSnomedCode(code, display, codeSystemParams);
 		}
 	}
+
+	private Parameters validateSnomedCode(String code,
+	                                      String display,
+	                                      List<LanguageDialect> languageDialects,
+	                                      FHIRCodeSystemVersionParams codeSystemParams) {
+
+		ConceptAndSystemResult conceptAndSystemResult =
+				fhirCodeSystemService.findSnomedConcept(code, languageDialects, codeSystemParams);
+
+		Concept concept = conceptAndSystemResult.concept();
+		FHIRCodeSystemVersion codeSystemVersion = conceptAndSystemResult.codeSystemVersion();
+		String message = conceptAndSystemResult.message();
+		String displayOut = null;
+		boolean result = false;
+
+		List<OperationOutcome.OperationOutcomeIssueComponent> issues = new ArrayList<>();
+
+		if (concept != null) {
+			displayOut = concept.getPt().getTerm();
+			result = isDisplayValid(concept, display);
+			if (!result) {
+				// Check if the display matches an inactive description.
+				// Reaching this branch implies result == false, and isDisplayValid only returns false
+				// when display is non-null, so an explicit display != null check is redundant here.
+				boolean inactiveDisplayMatch = concept.getDescriptions().stream()
+						.filter(d -> !d.isActive())
+						.anyMatch(d -> d.getTerm().equalsIgnoreCase(display));
+				if (inactiveDisplayMatch) {
+					result = true;
+					issues.add(buildInactiveDisplayIssue(concept, code, display));
+				} else {
+					message = "Code exists, but the display term is not recognised.";
+				}
+			} else if (display != null && !display.equalsIgnoreCase(concept.getPt().getTerm())) {
+				message = "Display term is acceptable, but not the preferred synonym in the language/dialect specified.";
+			}
+		} else if (message == null) {
+			message = "The code was not found in the specified code system.";
+		}
+
+		return buildSnomedValidateCodeParameters(concept, displayOut, message, result, issues, codeSystemVersion);
+	}
+
+	private OperationOutcome.OperationOutcomeIssueComponent buildInactiveDisplayIssue(Concept concept, String code, String display) {
+		String activeTerms = concept.getActiveDescriptions().stream()
+				.map(d -> "\"" + d.getTerm() + "\"")
+				.collect(Collectors.joining(","));
+		String msg = format("'%s' is no longer considered a correct display for code '%s' (status = inactive). The correct display is one of %s.",
+				display, code, activeTerms);
+		return createOperationOutcomeIssueComponent(
+				new CodeableConcept(new Coding(TX_ISSUE_TYPE, "display-comment", null)).setText(msg),
+				OperationOutcome.IssueSeverity.WARNING, PARAM_DISPLAY, IssueType.INVALID, null, null);
+	}
+
+	private Parameters buildSnomedValidateCodeParameters(Concept concept, String displayOut, String message, boolean result,
+	                                                     List<OperationOutcome.OperationOutcomeIssueComponent> issues,
+	                                                     FHIRCodeSystemVersion codeSystemVersion) {
+		Parameters parameters = new Parameters();
+		if (concept != null) {
+			parameters.addParameter(CODE, new CodeType(concept.getConceptId()));
+		}
+		if (displayOut != null) {
+			parameters.addParameter(DISPLAY, displayOut);
+		}
+		if (!issues.isEmpty()) {
+			parameters.addParameter(createParameterComponentWithOperationOutcomeWithIssues(issues));
+		}
+		if (concept != null && !concept.isActive()) {
+			parameters.addParameter(INACTIVE, true);
+		}
+		if (message != null) {
+			parameters.addParameter(MESSAGE, message);
+		}
+		parameters.addParameter(RESULT, result);
+		parameters.addParameter(SYSTEM, new UriType(FHIRHelper.isSnomedUri(codeSystemVersion.getUrl()) ? SNOMED_URI : codeSystemVersion.getUrl()));
+		parameters.addParameter(VERSION, codeSystemVersion.getVersion());
+
+		return parameters;
+	}
+
+	private boolean isDisplayValid(Concept concept, String display) {
+		if (display == null) return true;
+
+		String displayLower = display.toLowerCase();
+		if (concept.getPt().getTerm().toLowerCase().equals(displayLower)) return true;
+
+		return concept.getActiveDescriptions().stream()
+				.anyMatch(d -> d.getTerm().toLowerCase().equals(displayLower));
+	}
+
+	private Parameters validateNonSnomedCode(String code,
+	                                         String display,
+	                                         FHIRCodeSystemVersionParams codeSystemParams) {
+
+		FHIRCodeSystemVersion codeSystemVersion;
+		try {
+			codeSystemVersion = fhirCodeSystemService.findCodeSystemVersionOrThrow(codeSystemParams);
+		} catch (SnowstormFHIRServerResponseException e) {
+			return handleNonSnomedValidationException(e, code, codeSystemParams);
+		}
+
+		// A supplement cannot be used as a system for code validation — even when supplied as a tx-resource
+		if ("supplement".equals(codeSystemVersion.getContent())) {
+			return buildSupplementSystemError(code, codeSystemVersion, codeSystemParams);
+		}
+
+		FHIRConcept concept = findInlineConcept(codeSystemVersion, code)
+				.orElseGet(() -> fhirConceptService.findConcept(codeSystemVersion, code));
+		if (concept == null) {
+			return pMapper.resultFalse(code, codeSystemVersion);
+		}
+
+		return buildConceptValidationResponse(concept, code, display, codeSystemVersion);
+	}
+
+	private Parameters buildSupplementSystemError(String code, FHIRCodeSystemVersion codeSystemVersion,
+	                                              FHIRCodeSystemVersionParams codeSystemParams) {
+		String message = format("CodeSystem %s is a supplement, so can't be used as a value in Coding.system", codeSystemVersion.getCanonical());
+		CodeableConcept cc = new CodeableConcept(new Coding(TX_ISSUE_TYPE, "invalid-data", null)).setText(message);
+		OperationOutcome oo = FHIRHelper.createOperationOutcomeWithIssue(cc, OperationOutcome.IssueSeverity.ERROR,
+				"Coding.system", IssueType.INVALID, null, null);
+		Parameters parameters = new Parameters();
+		parameters.addParameter(CODE, new CodeType(code));
+		parameters.addParameter(new Parameters.ParametersParameterComponent(new StringType(PARAM_ISSUES)).setResource(oo));
+		parameters.addParameter(MESSAGE, message);
+		parameters.addParameter(RESULT, false);
+		parameters.addParameter(PARAM_SYSTEM, new UriType(codeSystemParams.getCodeSystem()));
+		return parameters;
+	}
+
+	private Parameters buildConceptValidationResponse(FHIRConcept concept, String code, String display,
+	                                                  FHIRCodeSystemVersion codeSystemVersion) {
+		boolean displayValidOrNull = display == null ||
+				display.equals(concept.getDisplay()) ||
+				concept.getDesignations().stream().anyMatch(d -> display.equals(d.getValue()));
+
+		List<OperationOutcome.OperationOutcomeIssueComponent> issues = new ArrayList<>();
+		addWithdrawnDisplayWarning(issues, concept, code, display, displayValidOrNull);
+		String conceptStatus = getDeprecatedStatus(concept);
+		String extraMessage = addDeprecatedConceptWarning(issues, code, conceptStatus);
+
+		// Build response in expected order: code, display, [issues], [message], result, [status], system
+		Parameters response = new Parameters();
+		response.addParameter(CODE, new CodeType(concept.getCode()));
+		response.addParameter(DISPLAY, concept.getDisplay());
+		if (!issues.isEmpty()) {
+			response.addParameter(createParameterComponentWithOperationOutcomeWithIssues(issues));
+		}
+		if (extraMessage != null) {
+			response.addParameter(MESSAGE, extraMessage);
+		} else if (!displayValidOrNull) {
+			response.addParameter(MESSAGE, "The code exists but the display is not valid.");
+		}
+		response.addParameter(RESULT, displayValidOrNull);
+		if (conceptStatus != null) {
+			response.addParameter("status", new CodeType(conceptStatus));
+		}
+		response.addParameter(SYSTEM, new UriType(FHIRHelper.isSnomedUri(codeSystemVersion.getUrl()) ? SNOMED_URI : codeSystemVersion.getUrl()));
+		if (!"0".equals(codeSystemVersion.getVersion())) {
+			response.addParameter(VERSION, codeSystemVersion.getVersion());
+		}
+
+		return response;
+	}
+
+	// Warn if the provided display matches a withdrawn/inactive designation
+	private void addWithdrawnDisplayWarning(List<OperationOutcome.OperationOutcomeIssueComponent> issues,
+	                                        FHIRConcept concept, String code, String display, boolean displayValidOrNull) {
+		if (display == null || !displayValidOrNull || display.equals(concept.getDisplay())) {
+			return;
+		}
+		FHIRDesignation matchingDesignation = concept.getDesignations().stream()
+				.filter(d -> display.equals(d.getValue()))
+				.findFirst().orElse(null);
+		if (matchingDesignation != null && isDesignationWithdrawn(matchingDesignation)) {
+			String msg = format("'%s' is no longer considered a correct display for code '%s' (status = deprecated). The correct display is one of \"%s\".",
+					display, code, concept.getDisplay());
+			issues.add(createOperationOutcomeIssueComponent(
+					new CodeableConcept(new Coding(TX_ISSUE_TYPE, "display-comment", null)).setText(msg),
+					OperationOutcome.IssueSeverity.WARNING, PARAM_DISPLAY, IssueType.INVALID, null, null));
+		}
+	}
+
+	private String getDeprecatedStatus(FHIRConcept concept) {
+		return concept.getProperties().getOrDefault("status", Collections.emptyList()).stream()
+				.filter(p -> "deprecated".equals(p.getValue()) || "retired".equals(p.getValue()))
+				.map(FHIRProperty::getValue)
+				.findFirst().orElse(null);
+	}
+
+	// Warn if the concept itself is deprecated; returns the warning message, or null if not deprecated
+	private String addDeprecatedConceptWarning(List<OperationOutcome.OperationOutcomeIssueComponent> issues,
+	                                           String code, String conceptStatus) {
+		if (conceptStatus == null) {
+			return null;
+		}
+		String msg = format("The concept '%s' is deprecated and its use should be reviewed", code);
+		issues.add(createOperationOutcomeIssueComponent(
+				new CodeableConcept(new Coding(TX_ISSUE_TYPE, "code-comment", null)).setText(msg),
+				OperationOutcome.IssueSeverity.WARNING, "code", IssueType.BUSINESSRULE, null, null));
+		return msg;
+	}
+
+	private boolean isDesignationWithdrawn(FHIRDesignation designation) {
+		List<FHIRExtension> exts = designation.getExtensions();
+		if (exts == null) return false;
+		return exts.stream().anyMatch(ext ->
+				"http://hl7.org/fhir/StructureDefinition/structuredefinition-standards-status".equals(ext.getUri()) &&
+				("withdrawn".equals(ext.getValue()) || "deprecated".equals(ext.getValue())));
+	}
+
+	private Parameters handleNonSnomedValidationException(SnowstormFHIRServerResponseException e,
+	                                                      String code,
+	                                                      FHIRCodeSystemVersionParams codeSystemParams) {
+		if (isSupplementAsCodeSystemException(e)) {
+			Parameters parameters = new Parameters();
+			parameters.addParameter(CODE, new CodeType(code));
+			OperationOutcome.OperationOutcomeIssueComponent firstIssue = e.getOperationOutcome().getIssueFirstRep();
+			List<Extension> filteredExts = firstIssue.getExtension().stream()
+					.filter(ext -> !"http://hl7.org/fhir/StructureDefinition/operationoutcome-message-id".equals(ext.getUrl()))
+					.toList();
+			firstIssue.setExtension(filteredExts);
+			parameters.addParameter(new Parameters.ParametersParameterComponent(new StringType(PARAM_ISSUES))
+					.setResource(e.getOperationOutcome()));
+			parameters.addParameter(MESSAGE, e.getMessage());
+			parameters.addParameter(RESULT, false);
+			parameters.addParameter(PARAM_SYSTEM, new UriType(codeSystemParams.getCodeSystem()));
+			return parameters;
+		} else if (e.getOperationOutcome().getIssue().stream().anyMatch(i ->
+				OperationOutcome.IssueType.NOTFOUND.equals(i.getCode()) &&
+						i.getLocation().stream().anyMatch(location -> "Coding.system".equals(location.toString())))) {
+
+			Parameters parameters = new Parameters();
+			parameters.addParameter(CODE, new CodeType(code));
+
+			String text = format("A definition for CodeSystem '%s' could not be found, so the code cannot be validated",
+					codeSystemParams.getCodeSystem());
+
+			OperationOutcome operationOutcome = e.getOperationOutcome();
+			OperationOutcome.OperationOutcomeIssueComponent issue = operationOutcome.getIssue().get(0);
+			issue.setSeverity(OperationOutcome.IssueSeverity.WARNING);
+			issue.getDetails().setText(text);
+			operationOutcome.setIssue(List.of(issue));
+
+			parameters.addParameter(new Parameters.ParametersParameterComponent(new StringType(PARAM_ISSUES))
+					.setResource(operationOutcome));
+			parameters.addParameter(MESSAGE, text);
+			parameters.addParameter(RESULT, true);
+			parameters.addParameter(PARAM_SYSTEM, new UriType(codeSystemParams.getCodeSystem()));
+			return parameters;
+		} else {
+			throw e;
+		}
+	}
+
 
 	private static boolean isSupplementAsCodeSystemException(SnowstormFHIRServerResponseException e) {
 		return !Optional.ofNullable(Optional.ofNullable(Optional.ofNullable(e.getOperationOutcome()).orElse(new OperationOutcome()).getIssue()).orElse(Collections.emptyList()).stream().findFirst().orElse(new OperationOutcome.OperationOutcomeIssueComponent()).getExtension()).orElse(Collections.emptyList()).stream().filter(i -> "http://hl7.org/fhir/StructureDefinition/operationoutcome-message-id".equals(i.getUrl()) && "CODESYSTEM_CS_NO_SUPPLEMENT".equals(i.getValue().primitiveValue())).toList().isEmpty();
@@ -622,42 +706,24 @@ public class FHIRCodeSystemProvider implements IResourceProvider, FHIRConstants 
 
 		String codeA = fhirHelper.recoverCode(codeAParam, codingA);
 		String codeB = fhirHelper.recoverCode(codeBParam, codingB);
-		SubsumesResult subsumesResult;
-		if (isPostcoordinatedSnomed(codeA, codeSystemParams) || isPostcoordinatedSnomed(codeB, codeSystemParams)) {
-			try {
-				subsumesResult = fhirCodeSystemService.subsumeTestForSnomedPostcoordination(codeA, codeB, codeSystemVersion);
-			} catch (ExpressionValidationException e) {
-				Parameters parameters = new Parameters();
-				parameters.addParameter("outcome", SubsumesResult.not_subsumed.getText());
-				parameters.addParameter("message", e.getMessage());
-				return parameters;
-			}
-		} else {
-			subsumesResult = testSubsumesPrecoordinated(codeSystemVersion, codeA, codeB);
-		}
-		return pMapper.singleOutValue("outcome", subsumesResult.getText(), codeSystemVersion);
-	}
-
-	private SubsumesResult testSubsumesPrecoordinated(FHIRCodeSystemVersion codeSystemVersion, String codeA, String codeB) {
 		if (codeA.equals(codeB) && fhirCodeSystemService.conceptExistsOrThrow(codeA, codeSystemVersion)) {
-			return SubsumesResult.equivalent;
+			return pMapper.singleOutValue(OUTCOME, "equivalent", codeSystemVersion);
 		}
 
 		// Test for A subsumes B, then B subsumes A
 		if (graphService.subsumes(codeA, codeB, codeSystemVersion)) {
-			return SubsumesResult.subsumes;
+			return pMapper.singleOutValue(OUTCOME, "subsumes", codeSystemVersion);
 		} else if (graphService.subsumes(codeB, codeA, codeSystemVersion)) {
-			return SubsumesResult.subsumed_by;
+			return pMapper.singleOutValue(OUTCOME, "subsumed-by", codeSystemVersion);
 		}
-
 		fhirCodeSystemService.conceptExistsOrThrow(codeA, codeSystemVersion);
 		fhirCodeSystemService.conceptExistsOrThrow(codeB, codeSystemVersion);
-		return SubsumesResult.not_subsumed;
+		return pMapper.singleOutValue(OUTCOME, "not-subsumed", codeSystemVersion);
 	}
 
 	@Override
 	public Class<? extends IBaseResource> getResourceType() {
 		return CodeSystem.class;
 	}
-	
+
 }

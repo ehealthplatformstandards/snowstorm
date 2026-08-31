@@ -6,13 +6,14 @@ import org.snomed.snowstorm.core.data.services.pojo.CodeSystemDefaultConfigurati
 
 public class CodeSystemUpdateRequest {
 
-	public String name;
-	public String uriModuleId;
-	public String owner;
-	public String countryCode;
-	public String maintainerType;
-	public String defaultLanguageCode;
-	public String[] defaultLanguageReferenceSets;
+	private String name;
+	private String uriModuleId;
+	private String owner;
+	private String countryCode;
+	private String countryName;
+	private String maintainerType;
+	private String defaultLanguageCode;
+	private String[] defaultLanguageReferenceSets;
 
 	@Schema(defaultValue = "false")
 	public boolean dailyBuildAvailable;
@@ -67,6 +68,10 @@ public class CodeSystemUpdateRequest {
 
 	public String getCountryCode() {
 		return countryCode;
+	}
+
+	public String getCountryName() {
+		return countryName;
 	}
 
 	public String getMaintainerType() {

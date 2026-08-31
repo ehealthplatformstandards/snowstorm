@@ -64,7 +64,7 @@ public class CommitServiceHookClient implements CommitListener {
 	@Override
 	public void preCommitCompletion(Commit commit) throws IllegalStateException {
 		if (restTemplate == null) {
-			logger.info("restTemplate == null, pre-commit completion done.");
+			logger.debug("restTemplate == null, pre-commit completion done.");
 			return;
 		}
 
@@ -125,8 +125,10 @@ public class CommitServiceHookClient implements CommitListener {
 		if (authenticationToken != null) {
 			if (authenticationToken.contains("=")) {
 				return authenticationToken.substring(0, authenticationToken.indexOf("=") + 4) + "...";
-			} else {
+			} else if (authenticationToken.length() > 4) {
 				return authenticationToken.substring(0, 4) + "...";
+			} else {
+				return "WARNING: Authentication Token not present (length = " + authenticationToken.length() + ")";
 			}
 		}
 		return null;

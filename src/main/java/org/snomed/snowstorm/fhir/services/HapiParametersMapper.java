@@ -1,11 +1,11 @@
 package org.snomed.snowstorm.fhir.services;
 
 import org.hl7.fhir.r4.model.*;
-import org.hl7.fhir.r4.model.CodeSystem;
 import org.snomed.snowstorm.core.data.domain.*;
 import org.snomed.snowstorm.core.data.domain.Identifier;
 import org.snomed.snowstorm.core.data.domain.expression.Expression;
 import org.snomed.snowstorm.core.data.services.CodeSystemDefaultConfigurationService;
+import org.snomed.snowstorm.core.data.services.ConceptService;
 import org.snomed.snowstorm.core.data.services.ExpressionService;
 import org.snomed.snowstorm.core.data.services.pojo.CodeSystemDefaultConfiguration;
 import org.snomed.snowstorm.core.pojo.LanguageDialect;
@@ -15,7 +15,6 @@ import org.snomed.snowstorm.fhir.domain.FHIRConcept;
 import org.snomed.snowstorm.fhir.domain.FHIRDesignation;
 import org.snomed.snowstorm.fhir.domain.FHIRProperty;
 import org.snomed.snowstorm.fhir.pojo.ConceptAndSystemResult;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -30,14 +29,23 @@ import static org.snomed.snowstorm.fhir.services.FHIRValueSetService.TX_ISSUE_TY
 
 @Service
 public class HapiParametersMapper implements FHIRConstants {
-	
-	@Autowired
-	private ExpressionService expressionService;
-	
-	@Autowired
-	private FHIRHelper fhirHelper;
-	@Autowired
-	private CodeSystemDefaultConfigurationService codeSystemDefaultConfigurationService;
+
+	private static final String PART_DESCRIPTION = "description";
+
+	private final ExpressionService expressionService;
+
+	private final FHIRHelper fhirHelper;
+
+	private final CodeSystemDefaultConfigurationService codeSystemDefaultConfigurationService;
+
+	private final ConceptService snomedConceptService;
+
+	public HapiParametersMapper(ExpressionService expressionService, FHIRHelper fhirHelper, CodeSystemDefaultConfigurationService codeSystemDefaultConfigurationService, ConceptService snomedConceptService) {
+		this.expressionService = expressionService;
+		this.fhirHelper = fhirHelper;
+		this.codeSystemDefaultConfigurationService = codeSystemDefaultConfigurationService;
+		this.snomedConceptService = snomedConceptService;
+	}
 
 	public Parameters singleOutValue(String key, String value) {
 		Parameters parameters = new Parameters();
@@ -53,20 +61,21 @@ public class HapiParametersMapper implements FHIRConstants {
 
 	public Parameters resultFalse(String code, FHIRCodeSystemVersion codeSystemVersion) {
 		Parameters parameters = new Parameters();
-		parameters.addParameter("code", new CodeType(code));
+		parameters.addParameter(CODE, new CodeType(code));
 		addSystemAndVersion(parameters, codeSystemVersion);
 
-		String message = format("Unknown code '%s' in the CodeSystem '%s' version '%s'", code, codeSystemVersion.getUrl(), codeSystemVersion.getVersion());
+		String systemUrl = FHIRHelper.isSnomedUri(codeSystemVersion.getUrl()) ? SNOMED_URI : codeSystemVersion.getUrl();
+		String message = format("Unknown code '%s' in the CodeSystem '%s' version '%s'", code, systemUrl, codeSystemVersion.getVersion());
 		OperationOutcome.IssueSeverity severity;
 		if(FRAGMENT.toCode().equals(codeSystemVersion.getContent())) {
 			severity = WARNING;
-			parameters.addParameter("result", true);
+			parameters.addParameter(RESULT, true);
 			message = message + " - note that the code system is labeled as a fragment, so the code may be valid in some other fragment";
 		} else {
 			severity = ERROR;
-			parameters.addParameter("result", false);
+			parameters.addParameter(RESULT, false);
 		}
-		parameters.addParameter("message", message);
+		parameters.addParameter(MESSAGE, message);
 		OperationOutcome.OperationOutcomeIssueComponent[] issues = new OperationOutcome.OperationOutcomeIssueComponent[1];
 		CodeableConcept detail1 = new CodeableConcept(new Coding(TX_ISSUE_TYPE, "invalid-code", null)).setText(message);
 		List<Extension> extensions = Collections.singletonList(new Extension("http://hl7.org/fhir/StructureDefinition/operationoutcome-message-id",new StringType("Unknown_Code_in_Version")));
@@ -76,55 +85,68 @@ public class HapiParametersMapper implements FHIRConstants {
 	}
 
 	public Parameters mapToFHIR(ConceptAndSystemResult conceptAndSystemResult, Collection<String> childIds,
-			Set<FhirSctProperty> properties, List<LanguageDialect> designations) {
+	                            Set<FhirSctProperty> properties, List<LanguageDialect> languageDialects) {
 
 		FHIRCodeSystemVersion codeSystemVersion = conceptAndSystemResult.codeSystemVersion();
 		Concept concept = conceptAndSystemResult.concept();
-		boolean postcoordinated = conceptAndSystemResult.postcoordinated();
 
 		Parameters parameters = new Parameters();
-		parameters.addParameter("code", concept.getConceptId());
-		parameters.addParameter("display", fhirHelper.getPreferredTerm(concept, designations));
-		Optional.ofNullable(conceptAndSystemResult.codeSystemVersion().getName()).ifPresent(x->parameters.addParameter("name", x));
-		//Optional.ofNullable(codeSystem.getTitle()).ifPresent(x->parameters.addParameter("title", x));
-		addSystemAndVersion(parameters, conceptAndSystemResult.codeSystemVersion());
-		boolean postcoordinatedCodeOnStandardCodeSystem = postcoordinated && !codeSystemVersion.getSnomedCodeSystem().isPostcoordinatedNullSafe();
-		parameters.addParameter("name", codeSystemVersion.getTitle() + (postcoordinatedCodeOnStandardCodeSystem ? " (Postcoordinated)" : ""));
+		parameters.addParameter(CODE, new CodeType(concept.getConceptId()));
+		addDesignations(parameters, concept);
+		parameters.addParameter(DISPLAY, fhirHelper.getPreferredTerm(concept, languageDialects));
+		String nameSystemUrl = FHIRHelper.isSnomedUri(codeSystemVersion.getUrl()) ? SNOMED_URI : codeSystemVersion.getUrl();
+		parameters.addParameter("name", nameSystemUrl + "|" + codeSystemVersion.getVersion());
+		addProperties(parameters, concept, properties, conceptAndSystemResult, languageDialects);
+		addParents(parameters, concept);
+		addChildren(parameters, childIds, conceptAndSystemResult, languageDialects);
+		addIdentifiers(parameters, concept);
 		addSystemAndVersion(parameters, codeSystemVersion);
-		parameters.addParameter("active", concept.isActive());
-		parameters.addParameter("inactive", !concept.isActive());
-		if (!postcoordinated) {
-			addProperties(parameters, concept, properties);
-			addDesignations(parameters, concept);
-			addParents(parameters, concept);
-			addChildren(parameters, childIds);
-			addIdentifiers(parameters, concept);
-		}
 		return parameters;
 	}
 
 	private void addSystemAndVersion(Parameters parameters, FHIRCodeSystemVersion codeSystem) {
-		parameters.addParameter("system", new UriType(codeSystem.getUrl()));
-		parameters.addParameter("version", codeSystem.getVersion());
+		String systemUrl = FHIRHelper.isSnomedUri(codeSystem.getUrl()) ? SNOMED_URI : codeSystem.getUrl();
+		parameters.addParameter(SYSTEM, new UriType(systemUrl));
+		parameters.addParameter(VERSION, codeSystem.getVersion());
 	}
 
 	public Parameters mapToFHIR(FHIRCodeSystemVersion codeSystemVersion, FHIRConcept concept) {
 		Parameters parameters = new Parameters();
-		Optional.ofNullable(codeSystemVersion.getName()).ifPresent(x->parameters.addParameter("name", x));
-		//Optional.of(codeSystemVersion.getTitle()).ifPresent(x->parameters.addParameter("title", x));
-		parameters.addParameter("system", new UriType(codeSystemVersion.getUrl()));
-		parameters.addParameter("version", codeSystemVersion.getVersion());
-		parameters.addParameter("display", concept.getDisplay());
-		parameters.addParameter("code", new CodeType(concept.getCode()));
+		Optional.of(codeSystemVersion.getName()).ifPresent(x->parameters.addParameter("name", x));
+		parameters.addParameter(SYSTEM, new UriType(codeSystemVersion.getUrl()));
+		parameters.addParameter(VERSION, codeSystemVersion.getVersion());
+		parameters.addParameter(DISPLAY, concept.getDisplay());
+		parameters.addParameter(CODE, new CodeType(concept.getCode()));
 
+		addConceptProperties(parameters, codeSystemVersion, concept);
+
+		addConceptDesignations(parameters, concept);
+
+		return parameters;
+	}
+
+	private void addConceptProperties(Parameters parameters, FHIRCodeSystemVersion codeSystemVersion, FHIRConcept concept) {
 		for (Map.Entry<String, List<FHIRProperty>> property : concept.getProperties().entrySet()) {
 			for (FHIRProperty propertyValue : property.getValue()) {
-				Parameters.ParametersParameterComponent param = parameters.addParameter().setName(PROPERTY);
-				param.addPart().setName(CODE).setValue(new CodeType(propertyValue.getCode()));
-				param.addPart().setName(VALUE).setValue(propertyValue.toHapiValue(codeSystemVersion.getUrl()));
+				String code = propertyValue.getCode();
+				Type hapiValue = propertyValue.toHapiValue(codeSystemVersion.getUrl());
+				if (DEFINITION.equals(code) && hapiValue instanceof StringType hapiString) {
+					parameters.addParameter(DEFINITION, hapiString.getValue());
+				} else if (NOT_SELECTABLE.equals(code) && hapiValue instanceof BooleanType hapiBool) {
+					parameters.addParameter(ABSTRACT, hapiBool.getValue());
+					Parameters.ParametersParameterComponent param = parameters.addParameter().setName(PROPERTY);
+					param.addPart().setName(CODE).setValue(new CodeType(code));
+					param.addPart().setName(VALUE).setValue(hapiValue);
+				} else {
+					Parameters.ParametersParameterComponent param = parameters.addParameter().setName(PROPERTY);
+					param.addPart().setName(CODE).setValue(new CodeType(code));
+					param.addPart().setName(VALUE).setValue(hapiValue);
+				}
 			}
 		}
+	}
 
+	private void addConceptDesignations(Parameters parameters, FHIRConcept concept) {
 		for (FHIRDesignation designation : concept.getDesignations()) {
 			Parameters.ParametersParameterComponent desParam = parameters.addParameter().setName(DESIGNATION);
 			if (designation.getLanguage() != null) {
@@ -145,46 +167,27 @@ public class HapiParametersMapper implements FHIRConstants {
 				desParam.addPart().setName(VALUE).setValue(new StringType(designation.getValue()));
 			}
 		}
-
-		return parameters;
 	}
 
 	public Parameters validateCodeResponse(FHIRConcept concept, boolean displayValidOrNull, FHIRCodeSystemVersion codeSystemVersion) {
 		Parameters parameters = new Parameters();
-		parameters.addParameter("result", displayValidOrNull);
-		parameters.addParameter("code", new CodeType(concept.getCode()));
-		addSystemAndVersion(parameters, codeSystemVersion);
-		if (!displayValidOrNull) {
-			parameters.addParameter("message", "The code exists but the display is not valid.");
+		parameters.addParameter(RESULT, displayValidOrNull);
+		parameters.addParameter(CODE, new CodeType(concept.getCode()));
+		parameters.addParameter(SYSTEM, new UriType(codeSystemVersion.getUrl()));
+		if (!"0".equals(codeSystemVersion.getVersion())) {
+			parameters.addParameter(VERSION, codeSystemVersion.getVersion());
 		}
-		parameters.addParameter("display", concept.getDisplay());
+		if (!displayValidOrNull) {
+			parameters.addParameter(MESSAGE, "The code exists but the display is not valid.");
+		}
+		parameters.addParameter(DISPLAY, concept.getDisplay());
 		return parameters;
 	}
 
 	private void addDesignations(Parameters parameters, Concept c) {
 		for (Description d : c.getActiveDescriptions()) {
 			Parameters.ParametersParameterComponent designation = parameters.addParameter().setName(DESIGNATION);
-			// 	TODO: with other values for designation.use might lead to multiple designations for the same description.
-			d.getAcceptabilityMap().forEach((langRefsetId, acceptability) -> {
-				Extension ducExt = new Extension("http://snomed.info/fhir/StructureDefinition/designation-use-context");
-				ducExt.addExtension("context", new Coding(SNOMED_URI, langRefsetId, null)); // TODO: is there a quick way to find a description for an id? Which description? Could be in any module/branch path.
-				// Add acceptability
-                switch (acceptability) {
-                    case Concepts.ACCEPTABLE_CONSTANT ->
-                            ducExt.addExtension("role", new Coding(SNOMED_URI, Concepts.ACCEPTABLE, Concepts.ACCEPTABLE_CONSTANT));
-                    case Concepts.PREFERRED_CONSTANT ->
-                            ducExt.addExtension("role", new Coding(SNOMED_URI, Concepts.PREFERRED, Concepts.PREFERRED_CONSTANT));
-	                default -> throw new IllegalArgumentException("Unknown acceptability: " + acceptability);
-                }
-				// Add type, this is sometimes but not always redundant to designation.use!
-				// TODO: currently it is truly redundant but as there are more alternatives for designation.use, e.g. "consumer", this is/will be needed here
-				ducExt.addExtension("type", new Coding(SNOMED_URI, d.getTypeId(), FHIRHelper.translateDescType(d.getTypeId())));
-
-				designation.addExtension(ducExt);
-			});
-
 			designation.addPart().setName(LANGUAGE).setValue(new CodeType(d.getLang()));
-			// TODO: use FHIR designation.use value set, e.g. "consumer" when an appropriate language reference set is used
 			designation.addPart().setName(USE).setValue(new Coding(SNOMED_URI, d.getTypeId(), FHIRHelper.translateDescType(d.getTypeId())));
 			designation.addPart().setName(VALUE).setValue(new StringType(d.getTerm()));
 		}
@@ -192,8 +195,6 @@ public class HapiParametersMapper implements FHIRConstants {
 
 	private void addIdentifiers(Parameters parameters, Concept c) {
 		for (Identifier identifier: c.getIdentifiers()) {
-			//We're going to need to look up the URI for this schema, supplied via configuration until we can add these
-			//as non-defining attributes to the schema concepts
 			CodeSystemDefaultConfiguration codeSystem = codeSystemDefaultConfigurationService.findByAlternativeSchemaSctid(identifier.getIdentifierSchemaId());
 			String alternateSchemaUri = codeSystem != null ? codeSystem.alternateSchemaUri() : null;
 			Coding coding = new Coding(alternateSchemaUri, identifier.getAlternateIdentifier(), null);
@@ -201,23 +202,17 @@ public class HapiParametersMapper implements FHIRConstants {
 		}
 	}
 
-	private void addProperties(Parameters parameters, Concept c, Set<FhirSctProperty> properties) {
-		Boolean sufficientlyDefined = c.getDefinitionStatusId().equals(Concepts.DEFINED);
-
-		if (c.getEffectiveTime() != null) {
-			parameters.addParameter(createProperty(FhirSctProperty.EFFECTIVE_TIME, c.getEffectiveTime(), FHIRProperty.STRING_TYPE));
-		}
-		if (c.getModuleId() != null) {
-			parameters.addParameter(createProperty(FhirSctProperty.MODULE_ID, c.getModuleId(), FHIRProperty.CODE_TYPE));
-		}
-
+	private void addProperties(Parameters parameters, Concept c, Set<FhirSctProperty> properties,
+	                           ConceptAndSystemResult conceptAndSystemResult, List<LanguageDialect> languageDialects) {
 		boolean allProperties = properties.contains(FhirSctProperty.ALL_PROPERTIES);
 
-		if (allProperties || properties.contains(FhirSctProperty.INACTVE)) {
-			parameters.addParameter(createProperty(FhirSctProperty.INACTVE, !c.isActive(), FHIRProperty.BOOLEAN_TYPE));
-		}
+		addRelationshipProperties(parameters, c);
+		addEffectiveTimeProperty(parameters, c);
+		parameters.addParameter(createProperty(FhirSctProperty.INACTVE, !c.isActive(), FHIRProperty.BOOLEAN_TYPE));
+		addModuleProperty(parameters, c, conceptAndSystemResult, languageDialects);
 
 		if (allProperties || properties.contains(FhirSctProperty.SUFFICIENTLY_DEFINED)) {
+			Boolean sufficientlyDefined = c.getDefinitionStatusId().equals(Concepts.DEFINED);
 			parameters.addParameter(createProperty(FhirSctProperty.SUFFICIENTLY_DEFINED, sufficientlyDefined, FHIRProperty.BOOLEAN_TYPE));
 		}
 
@@ -232,16 +227,91 @@ public class HapiParametersMapper implements FHIRConstants {
 		}
 	}
 
-	private void addParents(Parameters parameters, Concept c) {
-		List<Relationship> parentRels = c.getRelationships(true, Concepts.ISA, null, Concepts.INFERRED_RELATIONSHIP);
-		for (Relationship thisParentRel : parentRels) {
-			parameters.addParameter(createProperty(FhirSctProperty.PARENT, thisParentRel.getDestinationId(), FHIRProperty.CODE_TYPE));
+	// Attribute relationships (non-IS-A inferred)
+	private void addRelationshipProperties(Parameters parameters, Concept c) {
+		for (Relationship rel : c.getRelationships(true, null, null, Concepts.INFERRED_RELATIONSHIP)) {
+			if (!Concepts.ISA.equals(rel.getTypeId())) {
+				Parameters.ParametersParameterComponent property = new Parameters.ParametersParameterComponent().setName(PROPERTY);
+				property.addPart().setName(CODE).setValue(new CodeType(rel.getTypeId()));
+				ConceptMini typeConceptMini = rel.getType();
+				if (typeConceptMini != null && typeConceptMini.getPt() != null) {
+					property.addPart().setName("code-display").setValue(new StringType(typeConceptMini.getPt().getTerm()));
+				}
+				ConceptMini targetConceptMini = rel.getTarget();
+				if (targetConceptMini != null && targetConceptMini.getPt() != null) {
+					property.addPart().setName(PART_DESCRIPTION).setValue(new StringType(targetConceptMini.getPt().getTerm()));
+				}
+				property.addPart().setName(VALUE).setValue(new CodeType(rel.getDestinationId()));
+				parameters.addParameter(property);
+			}
 		}
 	}
 
-	private void addChildren(Parameters parameters, Collection<String> childIds) {
+	// effectiveTime as valueDateTime
+	private void addEffectiveTimeProperty(Parameters parameters, Concept c) {
+		if (c.getEffectiveTime() == null) {
+			return;
+		}
+		String raw = String.valueOf(c.getEffectiveTime());
+		String formatted = raw.length() == 8
+				? raw.substring(0, 4) + "-" + raw.substring(4, 6) + "-" + raw.substring(6, 8)
+				: raw;
+		Parameters.ParametersParameterComponent prop = new Parameters.ParametersParameterComponent().setName(PROPERTY);
+		prop.addPart().setName(CODE).setValue(FhirSctProperty.EFFECTIVE_TIME.toCodeType());
+		prop.addPart().setName(VALUE).setValue(new DateTimeType(formatted));
+		parameters.addParameter(prop);
+	}
+
+	private void addModuleProperty(Parameters parameters, Concept c,
+	                               ConceptAndSystemResult conceptAndSystemResult, List<LanguageDialect> languageDialects) {
+		if (c.getModuleId() == null) {
+			return;
+		}
+		Parameters.ParametersParameterComponent moduleProp = new Parameters.ParametersParameterComponent().setName(PROPERTY);
+		moduleProp.addPart().setName(CODE).setValue(FhirSctProperty.MODULE_ID.toCodeType());
+		String branchPath = conceptAndSystemResult.codeSystemVersion().getSnomedBranch();
+		if (branchPath != null) {
+			Map<String, ConceptMini> moduleMinis = snomedConceptService.findConceptMinis(
+					branchPath, Collections.singleton(c.getModuleId()), languageDialects).getResultsMap();
+			ConceptMini moduleMini = moduleMinis.get(c.getModuleId());
+			if (moduleMini != null && moduleMini.getPt() != null) {
+				moduleProp.addPart().setName(PART_DESCRIPTION).setValue(new StringType(moduleMini.getPt().getTerm()));
+			}
+		}
+		moduleProp.addPart().setName(VALUE).setValue(new CodeType(c.getModuleId()));
+		parameters.addParameter(moduleProp);
+	}
+
+	private void addParents(Parameters parameters, Concept c) {
+		List<Relationship> parentRels = c.getRelationships(true, Concepts.ISA, null, Concepts.INFERRED_RELATIONSHIP);
+		for (Relationship rel : parentRels) {
+			Parameters.ParametersParameterComponent property = new Parameters.ParametersParameterComponent().setName(PROPERTY);
+			property.addPart().setName(CODE).setValue(FhirSctProperty.PARENT.toCodeType());
+			ConceptMini target = rel.getTarget();
+			if (target != null && target.getPt() != null) {
+				property.addPart().setName(PART_DESCRIPTION).setValue(new StringType(target.getPt().getTerm()));
+			}
+			property.addPart().setName(VALUE).setValue(new CodeType(rel.getDestinationId()));
+			parameters.addParameter(property);
+		}
+	}
+
+	private void addChildren(Parameters parameters, Collection<String> childIds,
+	                         ConceptAndSystemResult conceptAndSystemResult, List<LanguageDialect> languageDialects) {
+		if (childIds.isEmpty()) return;
+		String branchPath = conceptAndSystemResult.codeSystemVersion().getSnomedBranch();
+		Map<String, ConceptMini> minis = branchPath != null
+				? snomedConceptService.findConceptMinis(branchPath, childIds, languageDialects).getResultsMap()
+				: Collections.emptyMap();
 		for (String childId : childIds) {
-			parameters.addParameter(createProperty(FhirSctProperty.CHILD, childId, FHIRProperty.CODE_TYPE));
+			Parameters.ParametersParameterComponent property = new Parameters.ParametersParameterComponent().setName(PROPERTY);
+			property.addPart().setName(CODE).setValue(FhirSctProperty.CHILD.toCodeType());
+			ConceptMini mini = minis.get(childId);
+			if (mini != null && mini.getPt() != null) {
+				property.addPart().setName(PART_DESCRIPTION).setValue(new StringType(mini.getPt().getTerm()));
+			}
+			property.addPart().setName(VALUE).setValue(new CodeType(childId));
+			parameters.addParameter(property);
 		}
 	}
 
@@ -260,19 +330,12 @@ public class HapiParametersMapper implements FHIRConstants {
 					throw new IllegalArgumentException(propertyValue + " is not of type 'Coding'");
 				}
 				break;
+			case FHIRProperty.BOOLEAN_TYPE:
+				property.addPart().setName(VALUE).setValue(new BooleanType((Boolean) propertyValue));
+				break;
 			default:
-				StringType value = new StringType(propertyValueString);
-				property.addPart().setName(getTypeName(propertyValue)).setValue(value);
+				property.addPart().setName(VALUE_STRING).setValue(new StringType(propertyValueString));
 		}
 		return property;
-	}
-
-	private String getTypeName(Object obj) {
-		if (obj instanceof String) {
-			return VALUE_STRING;
-		} else if (obj instanceof Boolean) {
-			return VALUE_BOOLEAN;
-		}
-		return null;
 	}
 }

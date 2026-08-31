@@ -12,7 +12,7 @@ public interface FHIRCodeSystemRepository extends ElasticsearchRepository<FHIRCo
 
 	FHIRCodeSystemVersion findByUrlAndVersion(String systemUrl, String version);
 
-	Optional<FHIRCodeSystemVersion> findFirstByCodeSystemIdOrderByVersionDesc(String codeSystemId);
+	Optional<FHIRCodeSystemVersion> findFirstByIdOrderByVersionDesc(String id);
 
-	List<FHIRCodeSystemVersion> findByUrlAndContent(String url, String content);
+	List<FHIRCodeSystemVersion> findAllByUrl(String systemUrl);
 }

@@ -20,7 +20,6 @@ import org.snomed.snowstorm.fhir.domain.FHIRPackageIndexFile;
 import org.snomed.snowstorm.fhir.domain.FHIRValueSet;
 import org.snomed.snowstorm.fhir.pojo.FHIRCodeSystemVersionParams;
 import org.snomed.snowstorm.fhir.pojo.ValueSetExpansionParameters;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -29,8 +28,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
-
 import static java.lang.String.format;
 import static org.snomed.snowstorm.fhir.services.FHIRHelper.DEFAULT_VERSION;
 
@@ -40,22 +37,28 @@ public class FHIRLoadPackageService {
 	@Value("${snowstorm.rest-api.readonly}")
 	private boolean readOnlyMode;
 
-	@Autowired
-	private ObjectMapper mapper;
+	private final ObjectMapper mapper;
 
-	@Autowired
-	private FHIRCodeSystemService codeSystemService;
+	private final FHIRCodeSystemService codeSystemService;
 
-	@Autowired
-	private FHIRValueSetService valueSetService;
+	private final FHIRValueSetService valueSetService;
 
-	@Autowired
-	private FHIRConceptService fhirConceptService;
+	private final FHIRValueSetFinderService valueSetFinderService;
 
-	@Autowired
-	private FhirContext fhirContext;
+	private final FHIRConceptService fhirConceptService;
+
+	private final FhirContext fhirContext;
 
 	private final Logger logger = LoggerFactory.getLogger(getClass());
+
+	public FHIRLoadPackageService(ObjectMapper mapper, FHIRCodeSystemService codeSystemService, FHIRValueSetService valueSetService, FHIRValueSetFinderService valueSetFinderService, FHIRConceptService fhirConceptService, FhirContext fhirContext) {
+		this.mapper = mapper;
+		this.codeSystemService = codeSystemService;
+		this.valueSetService = valueSetService;
+		this.valueSetFinderService = valueSetFinderService;
+		this.fhirConceptService = fhirConceptService;
+		this.fhirContext = fhirContext;
+	}
 
 	public void uploadPackageResources(File packageFile, Set<String> resourceUrlsToImport, String submittedFileName, boolean testValueSets) throws IOException {
 		FHIRHelper.readOnlyCheck(readOnlyMode);
@@ -71,68 +74,91 @@ public class FHIRLoadPackageService {
 		logger.info("Importing {} resources, found within index of package {}.{}", filesToImport.size(), submittedFileName,
 				testValueSets ? " Each value set will be expanded and any issues logged as warning." : "");
 
-		// Import all code systems
-		for (FHIRPackageIndexFile indexFileToImport : filesToImport.stream().filter(file -> file.getResourceType().equals("CodeSystem")).collect(Collectors.toList())) {
-			String filename = indexFileToImport.getFilename();
-			String id = indexFileToImport.getId();
-			String url = indexFileToImport.getUrl();
-			if (id != null && url != null) {
-				CodeSystem codeSystem = extractObject(new FileInputStream(packageFile), filename, CodeSystem.class, jsonParser);
-				codeSystem.setId(id);
-				codeSystem.setUrl(url);
-				if (FHIRHelper.isSnomedUri(codeSystem.getUrl())) {
-					logger.info("Skipping import of SNOMED CT code system via package. Please use the native SNOMED-CT API RF2 import.");
-					continue;
-				}
-				String version = indexFileToImport.getVersion();
-				FHIRCodeSystemVersion existingCodeSystemVersion = codeSystemService.findCodeSystemVersion(new FHIRCodeSystemVersionParams(url).setVersion(version));
-				if (existingCodeSystemVersion != null) {
-					if (codeSystem.getContent() == CodeSystem.CodeSystemContentMode.NOTPRESENT) {
-						logger.info("Skipping import of CodeSystem {} with 'content:not-present' because a CodeSystem with the same url and version already exists.", existingCodeSystemVersion.getUrl());
-						continue;
-					} else {
-						logger.info("Deleting existing CodeSystem and concepts for url:{}, version:{}", existingCodeSystemVersion.getUrl(), existingCodeSystemVersion.getVersion());
-						codeSystemService.deleteCodeSystemVersion(existingCodeSystemVersion);
-					}
-				}
-				logger.info("Creating CodeSystem {}", codeSystem.getUrl());
-				FHIRCodeSystemVersion codeSystemVersion;
-				try {
-					codeSystemVersion = codeSystemService.createUpdate(codeSystem);
-				} catch (ServiceException e) {
-					throw new IOException("Failed to create FHIR CodeSystem.", e);
-				}
-				List<CodeSystem.ConceptDefinitionComponent> concepts = getConcepts(codeSystem, codeSystemVersion);
-				logger.info("Importing CodeSystem {} with {} concepts from package", codeSystem.getUrl(), concepts != null ? concepts.size() : 0);
-				if (concepts != null ) {
-					fhirConceptService.saveAllConceptsOfCodeSystemVersion(concepts, codeSystemVersion);
-				}
-			}
-		}
-
-		// Import all value sets
-		for (FHIRPackageIndexFile indexFileToImport : filesToImport.stream().filter(file -> file.getResourceType().equals("ValueSet")).collect(Collectors.toList())) {
-			String filename = indexFileToImport.getFilename();
-			String id = indexFileToImport.getId();
-			String url = indexFileToImport.getUrl();
-			if (id != null && url != null) {
-				ValueSet valueSet = extractObject(new FileInputStream(packageFile), filename, ValueSet.class, jsonParser);
-				valueSet.setId(id);
-				valueSet.setUrl(url);
-				valueSet.setVersion(indexFileToImport.getVersion());
-				logger.info("Importing ValueSet {} {} from package", valueSet.getUrl(), valueSet.getVersion());
-				valueSetService.createOrUpdateValuesetWithoutExpandValidation(valueSet);
-				if (testValueSets) {
-					try {
-						valueSetService.expand(new ValueSetExpansionParameters(valueSet, true, true), null);
-					} catch (SnowstormFHIRServerResponseException e) {
-						logger.warn("Failed to expand ValueSet {}, {}", valueSet.getUrl(), e.getMessage());
-					}
-				}
-			}
-		}
-
+		importCodeSystems(packageFile, filesToImport, jsonParser);
+		importValueSets(packageFile, testValueSets, filesToImport, jsonParser);
 		logger.info("Completed import of package {}.", submittedFileName);
+	}
+
+	private void importCodeSystems(File packageFile, List<FHIRPackageIndexFile> filesToImport, JsonParser jsonParser) throws IOException {
+		// Import all code systems
+		for (FHIRPackageIndexFile indexFileToImport : filesToImport.stream().filter(file -> file.getResourceType().equals("CodeSystem")).toList()) {
+			String filename = indexFileToImport.getFilename();
+			String id = indexFileToImport.getId();
+			String url = indexFileToImport.getUrl();
+			if (id != null && url != null) {
+				importCodeSystem(packageFile, indexFileToImport, filename, id, url, jsonParser);
+			}
+		}
+	}
+
+	private void importCodeSystem(File packageFile, FHIRPackageIndexFile indexFileToImport, String filename, String id, String url, JsonParser jsonParser) throws IOException {
+		CodeSystem codeSystem = extractObject(new FileInputStream(packageFile), filename, CodeSystem.class, jsonParser);
+		codeSystem.setId(id);
+		codeSystem.setUrl(url);
+		if (FHIRHelper.isSnomedUri(codeSystem.getUrl())) {
+			logger.info("Skipping import of SNOMED CT code system via package. Please use the native SNOMED-CT API RF2 import.");
+			return;
+		}
+		String version = indexFileToImport.getVersion();
+		FHIRCodeSystemVersion existingCodeSystemVersion = codeSystemService.findCodeSystemVersion(new FHIRCodeSystemVersionParams(url).setVersion(version));
+		deleteExistingCodeSystemVersionIfPresent(codeSystem, existingCodeSystemVersion);
+		logger.info("Creating CodeSystem {}", codeSystem.getUrl());
+		FHIRCodeSystemVersion codeSystemVersion;
+		try {
+			codeSystemVersion = codeSystemService.createUpdate(codeSystem);
+		} catch (ServiceException e) {
+			throw new IOException("Failed to create FHIR CodeSystem.", e);
+		}
+		List<CodeSystem.ConceptDefinitionComponent> concepts = getConcepts(codeSystem, codeSystemVersion);
+		logger.info("Importing CodeSystem {} with {} concepts from package", codeSystem.getUrl(), concepts != null ? concepts.size() : 0);
+		if (concepts != null ) {
+			fhirConceptService.saveAllConceptsOfCodeSystemVersion(concepts, codeSystemVersion);
+		}
+	}
+
+	private void deleteExistingCodeSystemVersionIfPresent(CodeSystem codeSystem, FHIRCodeSystemVersion existingCodeSystemVersion) {
+		if (existingCodeSystemVersion != null) {
+			if (codeSystem.getContent() == CodeSystem.CodeSystemContentMode.NOTPRESENT) {
+				logger.info("Skipping import of CodeSystem %s with 'content:not-present' because a CodeSystem with the same url and version already exists.");
+			} else {
+				logger.info("Deleting existing CodeSystem and concepts for url:{}, version:{}", existingCodeSystemVersion.getUrl(), existingCodeSystemVersion.getVersion());
+				codeSystemService.deleteCodeSystemVersion(existingCodeSystemVersion);
+			}
+		}
+	}
+
+	private void importValueSets(File packageFile, boolean testValueSets, List<FHIRPackageIndexFile> filesToImport, JsonParser jsonParser) throws IOException {
+		// Import all value sets
+		for (FHIRPackageIndexFile indexFileToImport : filesToImport.stream().filter(file -> file.getResourceType().equals("ValueSet")).toList()) {
+			String filename = indexFileToImport.getFilename();
+			String id = indexFileToImport.getId();
+			String url = indexFileToImport.getUrl();
+			if (id != null && url != null) {
+				importValueSet(packageFile, testValueSets, indexFileToImport, filename, id, url, jsonParser);
+			}
+		}
+	}
+
+	private void importValueSet(File packageFile, boolean testValueSets, FHIRPackageIndexFile indexFileToImport, String filename, String id, String url, JsonParser jsonParser) throws IOException {
+		ValueSet valueSet = extractObject(new FileInputStream(packageFile), filename, ValueSet.class, jsonParser);
+		valueSet.setId(id);
+		valueSet.setUrl(url);
+		// Only set version if it was explicitly in the resource; DEFAULT_VERSION is a sentinel for "no version"
+		String indexVersion = indexFileToImport.getVersion();
+		if (indexVersion != null && !FHIRHelper.DEFAULT_VERSION.equals(indexVersion)) {
+			valueSet.setVersion(indexVersion);
+		} else if (FHIRHelper.DEFAULT_VERSION.equals(indexVersion)) {
+			valueSet.setVersion(null);
+		}
+		logger.info("Importing ValueSet {} {} from package", valueSet.getUrl(), valueSet.getVersion());
+		valueSetService.createOrUpdateValuesetWithoutExpandValidation(valueSet);
+		if (testValueSets) {
+			try {
+				valueSetService.expand(new ValueSetExpansionParameters(valueSet, true, true), null);
+			} catch (SnowstormFHIRServerResponseException e) {
+				logger.warn("Failed to expand ValueSet {}, {}", valueSet.getUrl(), e.getMessage());
+			}
+		}
 	}
 
 	private List<CodeSystem.ConceptDefinitionComponent> getConcepts(CodeSystem codeSystem, FHIRCodeSystemVersion version) {
@@ -143,11 +169,6 @@ public class FHIRLoadPackageService {
 			CodeSystem newCodeSystem = codeSystemService.addSupplementToCodeSystem(codeSystem, version);
 			concepts = newCodeSystem.getConcept();
 		}
-
-
-
-
-
 		return concepts;
 	}
 
@@ -163,7 +184,7 @@ public class FHIRLoadPackageService {
 		}
 		if (!importAll) {
 			Set<String> resourcesNotFound = new HashSet<>(resourceUrlsToImport);
-			resourcesNotFound.removeAll(filesToImport.stream().map(FHIRPackageIndexFile::getUrl).collect(Collectors.toList()));
+			resourcesNotFound.removeAll(filesToImport.stream().map(FHIRPackageIndexFile::getUrl).toList());
 			if (!resourcesNotFound.isEmpty()) {
 				throw FHIRHelper.exception(format("Failed to find resources (%s) within package index.", resourcesNotFound), OperationOutcome.IssueType.NOTFOUND, 400);
 			}
@@ -199,7 +220,7 @@ public class FHIRLoadPackageService {
 		if (codeSystemVersion != null) {
 			return true;
 		}
-		Optional<FHIRValueSet> valueSet = valueSetService.findLatestByUrl(resourceUrl);
+		Optional<FHIRValueSet> valueSet = valueSetFinderService.findLatestByUrl(resourceUrl);
 		return valueSet.isPresent();
 	}
 }

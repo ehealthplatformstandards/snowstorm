@@ -5,6 +5,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.hl7.fhir.r4.model.CodeSystem;
 import org.hl7.fhir.r4.model.Coding;
 import org.hl7.fhir.r4.model.ValueSet;
+import org.snomed.snowstorm.fhir.config.FHIRConstants;
 import org.snomed.snowstorm.core.data.domain.Description;
 
 import java.util.ArrayList;
@@ -20,11 +21,10 @@ public class FHIRDesignation {
 	private String use;
 	private String value;
 
-
-
 	private List<FHIRExtension> extensions;
 
 	public FHIRDesignation() {
+		// Default constructor needed for Spring Data / Jackson
 	}
 
 	public FHIRDesignation(TermConceptDesignation designation) {
@@ -92,7 +92,13 @@ public class FHIRDesignation {
 				String[] split = use.split("\\|");
 				return addKnownDisplays(new Coding(split[0], split[1], null));
 			} else {
-				return new Coding(null, use, null);
+				// Some serialized designations may lose the original system (e.g. only "display" is retained).
+				// Reconstruct the expected HL7 designation-usage system where possible.
+				if (FHIRConstants.DISPLAY.equals(use)) {
+					return addKnownDisplays(new Coding(FHIRConstants.HL7_CS_DESIGNATION_USAGE, use, null));
+				}
+				// For SNOMED description acceptability designations, some payloads may only retain the code.
+				return addKnownDisplays(new Coding(SNOMED_URI, use, null));
 			}
 		}
 		return null;
@@ -110,19 +116,17 @@ public class FHIRDesignation {
 	}
 
 	private static Coding addKnownDisplays(Coding coding) {
-		if (coding != null) {
-			if (SNOMED_URI.equals(coding.getSystem())) {
-				if ("900000000000003001".equals(coding.getCode())) {
-					coding.setDisplay("Fully specified name");
-				} else if ("900000000000013009".equals(coding.getCode())) {
-					coding.setDisplay("Synonym");
-				} else if ("900000000000550004".equals(coding.getCode())) {
-					coding.setDisplay("Text definition");
-				} else if ("900000000000548007".equals(coding.getCode())) {
-					coding.setDisplay("PREFERRED");
-				} else if ("900000000000549004".equals(coding.getCode())) {
-					coding.setDisplay("ACCEPTABLE");
-				}
+		if (coding != null && SNOMED_URI.equals(coding.getSystem())) {
+			if ("900000000000003001".equals(coding.getCode())) {
+				coding.setDisplay("Fully specified name");
+			} else if ("900000000000013009".equals(coding.getCode())) {
+				coding.setDisplay("Synonym");
+			} else if ("900000000000550004".equals(coding.getCode())) {
+				coding.setDisplay("Text definition");
+			} else if ("900000000000548007".equals(coding.getCode())) {
+				coding.setDisplay("PREFERRED");
+			} else if ("900000000000549004".equals(coding.getCode())) {
+				coding.setDisplay("ACCEPTABLE");
 			}
 		}
 		return coding;

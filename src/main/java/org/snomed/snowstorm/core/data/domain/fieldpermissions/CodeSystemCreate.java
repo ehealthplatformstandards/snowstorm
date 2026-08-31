@@ -16,5 +16,4 @@ public interface CodeSystemCreate {
 	String[] getDefaultLanguageReferenceSets();
 	String getBranchPath();
 	Integer getDependantVersionEffectiveTime();
-	Short getMaximumPostcoordinationLevel();
 }

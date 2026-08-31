@@ -7,15 +7,18 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.hl7.fhir.r4.model.*;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.snomed.snowstorm.core.data.services.RuntimeServiceException;
 import org.snomed.snowstorm.fhir.domain.FHIRPackageIndexFile;
 import org.snomed.snowstorm.fhir.pojo.CanonicalUri;
 import org.snomed.snowstorm.fhir.pojo.ValueSetExpansionParameters;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 
 import static org.snomed.snowstorm.fhir.services.FHIRHelper.*;
@@ -28,35 +31,40 @@ class FHIRValueSetProviderHelper {
 		ctx = FhirContext.forR4();
 	}
 
+	private FHIRValueSetProviderHelper() {
+		// Prevent instantiation
+	}
+
 	static ValueSetExpansionParameters getValueSetExpansionParameters(IdType id, final List<Parameters.ParametersParameterComponent> parametersParameterComponents) {
 		Parameters.ParametersParameterComponent valueSetParam = findParameterOrNull(parametersParameterComponents, "valueSet");
 		return new ValueSetExpansionParameters(
-					id != null ? id.getIdPart() : null,
-					valueSetParam != null ? (ValueSet) valueSetParam.getResource() : null,
-					findParameterStringOrNull(parametersParameterComponents, "url"),
-					findParameterStringOrNull(parametersParameterComponents, "valueSetVersion"),
-					findParameterStringOrNull(parametersParameterComponents, "context"),
-					findParameterStringOrNull(parametersParameterComponents, "contextDirection"),
-					findParameterStringOrNull(parametersParameterComponents, "filter"),
-					findParameterStringOrNull(parametersParameterComponents, "date"),
-					findParameterIntOrNull(parametersParameterComponents, "offset"),
-					findParameterIntOrNull(parametersParameterComponents, "count"),
-					findParameterBooleanOrNull(parametersParameterComponents, "includeDesignations"),
-					findParameterStringListOrNull(parametersParameterComponents, "designation"),
-					findParameterBooleanOrNull(parametersParameterComponents, "includeDefinition"),
-					findParameterBooleanOrNull(parametersParameterComponents, "activeOnly"),
-					findParameterBooleanOrNull(parametersParameterComponents, "excludeNested"),
-					findParameterBooleanOrNull(parametersParameterComponents, "excludeNotForUI"),
-					findParameterBooleanOrNull(parametersParameterComponents, "excludePostCoordinated"),
-					findParameterStringOrNull(parametersParameterComponents, "displayLanguage"),
-					findParameterCanonicalOrNull(parametersParameterComponents, "exclude-system"),
-					findParameterCanonicalOrNull(parametersParameterComponents, "system-version"),
-					findParameterCanonicalOrNull(parametersParameterComponents, "check-system-version"),
-					findParameterCanonicalOrNull(parametersParameterComponents, "force-system-version"),
-					findParameterStringOrNull(parametersParameterComponents, "version"),
-					findParameterStringOrNull(parametersParameterComponents, "property"),
-					findParameterCanonicalOrNull(parametersParameterComponents, "default-valueset-version"),
-				false);
+			id != null ? id.getIdPart() : null,
+			valueSetParam != null ? (ValueSet) valueSetParam.getResource() : null,
+			findParameterStringOrNull(parametersParameterComponents, "url"),
+			findParameterStringOrNull(parametersParameterComponents, "valueSetVersion"),
+			findParameterStringOrNull(parametersParameterComponents, "context"),
+			findParameterStringOrNull(parametersParameterComponents, "contextDirection"),
+			findParameterStringOrNull(parametersParameterComponents, "filter"),
+			findParameterStringOrNull(parametersParameterComponents, "date"),
+			findParameterIntOrNull(parametersParameterComponents, "offset"),
+			findParameterIntOrNull(parametersParameterComponents, "count"),
+			findParameterBooleanOrNull(parametersParameterComponents, "includeDesignations"),
+			findParameterStringListOrNull(parametersParameterComponents, "designation"),
+			findParameterBooleanOrNull(parametersParameterComponents, "includeDefinition"),
+			findParameterBooleanOrNull(parametersParameterComponents, "activeOnly"),
+			findParameterBooleanOrNull(parametersParameterComponents, "excludeNested"),
+			findParameterBooleanOrNull(parametersParameterComponents, "excludeNotForUI"),
+			findParameterBooleanOrNull(parametersParameterComponents, "excludePostCoordinated"),
+			findParameterStringOrNull(parametersParameterComponents, "displayLanguage"),
+			findParameterCanonicalOrNull(parametersParameterComponents, "exclude-system"),
+			findParameterCanonicalOrNull(parametersParameterComponents, "system-version"),
+			findParameterCanonicalOrNull(parametersParameterComponents, "check-system-version"),
+			findParameterCanonicalOrNull(parametersParameterComponents, "force-system-version"),
+			findParameterStringOrNull(parametersParameterComponents, "version"),
+			findParameterStringOrNull(parametersParameterComponents, "property"),
+			findParameterCanonicalOrNull(parametersParameterComponents, "default-valueset-version"),
+			findParameterBooleanOrNull(parametersParameterComponents, "allowMaximumSizeExpansion")
+		);
 	}
 
 	static ValueSetExpansionParameters getValueSetExpansionParameters(
@@ -78,9 +86,9 @@ class FHIRValueSetProviderHelper {
 			final BooleanType excludePostCoordinated,
 			final String displayLanguage,
 			final StringType excludeSystem,
-			final StringType systemVersion,
-			final StringType checkSystemVersion,
-			final StringType forceSystemVersion,
+			final CanonicalType systemVersion,
+			final CanonicalType checkSystemVersion,
+			final CanonicalType forceSystemVersion,
 			final StringType version,
 			final CodeType property,
 			final CanonicalType versionValueSet) {
@@ -111,7 +119,8 @@ class FHIRValueSetProviderHelper {
 					getOrNull(version),
 					getOrNull(property),
 					CanonicalUri.fromString(getOrNull(versionValueSet)),
-					false);
+		false
+			);
 	}
 
 	@Nullable
@@ -156,42 +165,29 @@ class FHIRValueSetProviderHelper {
 		}
 	}
 
-	public static File createNpmPackageFromResources(List<Resource> resources) {
+	private static class FileWithContents {
+		FHIRPackageIndexFile indexFile;
+		String content;
+	}
 
-		class Tuple{
-			public FHIRPackageIndexFile indexFile;
-			public String string;
+	private static class FHIRIndex {
+		private List<FHIRPackageIndexFile> files;
+
+		public List<FHIRPackageIndexFile> getFiles() {
+			return files;
 		}
 
-		List<Tuple> tuples = resources.stream().map(x -> {
-					Tuple tuple = new Tuple();
-					FHIRPackageIndexFile temp = new FHIRPackageIndexFile();
-					temp.id = x.getIdPart();
-					x.getNamedProperty("url").getValues().stream().findFirst().ifPresent(y -> { temp.url = y.primitiveValue();});
-					temp.resourceType = x.getResourceType().toString();
-					Optional<String> version = x.getNamedProperty("version").getValues().stream().findFirst().map(Base::primitiveValue);
-					if(version.isPresent()) {
-						temp.version = version.get();
-						temp.filename = "%s-%s-%s.json".formatted(temp.resourceType, temp.id, temp.version);
-					} else {
-						temp.filename = "%s-%s.json".formatted(temp.resourceType, temp.id);
-					}
-					tuple.indexFile = temp;
+		public void setFiles(List<FHIRPackageIndexFile> files) {
+			this.files = files;
+		}
+	}
 
+	public static File createNpmPackageFromResources(List<Resource> resources) {
 
+		List<FileWithContents> allFilesWithContents = getAllFilesWithContents(resources);
 
-					// Instantiate a new JSON parser
-					IParser parser = ctx.newJsonParser();
-
-					// Serialize it
-            		tuple.string = parser.encodeResourceToString(x);
-
-					return tuple;
-				}
-		).toList();
-
-        try {
-            File npmPackage = File.createTempFile("tx-resources-",".tgz");
+		try {
+            File npmPackage = createSecureTempFile("tx-resources-", ".tgz");
             npmPackage.deleteOnExit();
 			FileOutputStream fop = new FileOutputStream(npmPackage);
 			BufferedOutputStream bop = new BufferedOutputStream(fop);
@@ -199,30 +195,7 @@ class FHIRValueSetProviderHelper {
 			TarArchiveOutputStream tarArchiveOutputStream = new TarArchiveOutputStream(gzipOutputStream);
 
 			try {
-
-				for (Tuple tuple : tuples) {
-					TarArchiveEntry entry = new TarArchiveEntry("package/" + tuple.indexFile.getFilename());
-					entry.setSize(tuple.string.getBytes().length);
-					tarArchiveOutputStream.putArchiveEntry(entry);
-					tarArchiveOutputStream.write(tuple.string.getBytes());
-					tarArchiveOutputStream.closeArchiveEntry();
-				}
-
-				class FHIRIndex {
-					public List<FHIRPackageIndexFile> files;
-				}
-
-				FHIRIndex fi = new FHIRIndex();
-				fi.files = tuples.stream().map(x -> x.indexFile).toList();
-				ObjectMapper mapper = new ObjectMapper();
-				String index = mapper.writeValueAsString(fi);
-
-				TarArchiveEntry entry = new TarArchiveEntry("package/.index.json");
-				entry.setSize(index.getBytes().length);
-
-				tarArchiveOutputStream.putArchiveEntry(entry);
-				tarArchiveOutputStream.write(index.getBytes());
-				tarArchiveOutputStream.closeArchiveEntry();
+				addContentToArchive(allFilesWithContents, tarArchiveOutputStream);
 			} finally {
 				tarArchiveOutputStream.finish();
 				tarArchiveOutputStream.close();
@@ -231,9 +204,76 @@ class FHIRValueSetProviderHelper {
 				fop.close();
 			}
 			return npmPackage;
-
         } catch (IOException e) {
-            throw new RuntimeServiceException(e);
+            throw new UncheckedIOException(e);
         }
+	}
+
+	// Creates a temp file readable/writable by the owner only, avoiding the world-readable default of the shared temp directory.
+	private static File createSecureTempFile(String prefix, String suffix) throws IOException {
+		try {
+			return Files.createTempFile(prefix, suffix,
+					PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))).toFile();
+		} catch (UnsupportedOperationException e) {
+			// Non-POSIX filesystem (e.g. Windows), where the per-user temp directory is already private.
+			return File.createTempFile(prefix, suffix);
+		}
+	}
+
+	private static void addContentToArchive(List<FileWithContents> allFilesWithContents, TarArchiveOutputStream tarArchiveOutputStream) throws IOException {
+		for (FileWithContents tuple : allFilesWithContents) {
+			TarArchiveEntry entry = new TarArchiveEntry("package/" + tuple.indexFile.getFilename());
+			entry.setSize(tuple.content.getBytes().length);
+			tarArchiveOutputStream.putArchiveEntry(entry);
+			tarArchiveOutputStream.write(tuple.content.getBytes());
+			tarArchiveOutputStream.closeArchiveEntry();
+		}
+
+		FHIRIndex fi = new FHIRIndex();
+		fi.setFiles(allFilesWithContents.stream().map(x -> x.indexFile).toList());
+		ObjectMapper mapper = new ObjectMapper();
+		String index = mapper.writeValueAsString(fi);
+
+		TarArchiveEntry entry = new TarArchiveEntry("package/.index.json");
+		entry.setSize(index.getBytes().length);
+
+		tarArchiveOutputStream.putArchiveEntry(entry);
+		tarArchiveOutputStream.write(index.getBytes());
+		tarArchiveOutputStream.closeArchiveEntry();
+	}
+
+	private static @NotNull List<FileWithContents> getAllFilesWithContents(List<Resource> resources) {
+		return resources.stream().map(resource -> {
+					FileWithContents fileWithContents = new FileWithContents();
+					FHIRPackageIndexFile temp = new FHIRPackageIndexFile();
+					temp.id = resource.getIdPart();
+					resource.getNamedProperty("url").getValues().stream().findFirst().ifPresent(y ->  temp.url = y.primitiveValue());
+					if (temp.id == null || temp.id.isEmpty()) {
+						String base = temp.url != null ? temp.url : UUID.randomUUID().toString();
+						temp.id = base.replaceAll("^urn:uuid:", "").replaceAll("^https?://", "").replaceAll("[^a-zA-Z0-9.-]", "-");
+					}
+					temp.resourceType = resource.getResourceType().toString();
+					// Use URL for filename to avoid collisions when multiple resources share the same id
+					String fileKey = temp.url != null
+							? temp.url.replaceAll("^urn:uuid:", "").replaceAll("^https?://", "").replaceAll("[^a-zA-Z0-9.-]", "-")
+							: temp.id;
+					Optional<String> version = resource.getNamedProperty("version").getValues().stream().findFirst().map(Base::primitiveValue);
+					if(version.isPresent()) {
+						temp.version = version.get();
+						temp.filename = "%s-%s-%s.json".formatted(temp.resourceType, fileKey, temp.version);
+					} else {
+						temp.filename = "%s-%s.json".formatted(temp.resourceType, fileKey);
+					}
+					fileWithContents.indexFile = temp;
+
+					// Instantiate a new JSON parser
+					IParser parser = ctx.newJsonParser();
+
+					// Serialize it
+            		fileWithContents.content = parser.encodeResourceToString(resource);
+
+					return fileWithContents;
+				}
+		).toList();
 	}
 }

@@ -148,6 +148,14 @@ public class Concept extends SnomedComponent<Concept> implements ConceptView, Sn
 		return new Object[]{active, getModuleId(), definitionStatusId};
 	}
 
+	@Override
+	protected void restoreFromReleaseHash(String[] releaseHashParts) {
+		super.restoreFromReleaseHash(releaseHashParts);
+		if (releaseHashParts.length > 2) {
+			setDefinitionStatusId(releaseHashParts[2]);
+		}
+	}
+
 	@JsonView(value = View.Component.class)
 	@Override
 	public TermLangPojo getFsn() {
@@ -300,12 +308,15 @@ public class Concept extends SnomedComponent<Concept> implements ConceptView, Sn
 	}
 
 	public Set<ReferenceSetMember> getAllAnnotationMembers() {
-		Set<ReferenceSetMember> members = annotations.stream().map(Annotation::toRefsetMember).collect(Collectors.toSet());
-		members.forEach(member -> {
-			member.setReferencedComponentId(getConceptId());
-			member.setConceptId(getConceptId());
-		});
-		return members;
+		if (annotations != null) {
+			Set<ReferenceSetMember> members = annotations.stream().map(Annotation::toRefsetMember).collect(Collectors.toSet());
+			members.forEach(member -> {
+				member.setReferencedComponentId(getConceptId());
+				member.setConceptId(getConceptId());
+			});
+			return members;
+		}
+		return Collections.emptySet();
 	}
 
 	@Override

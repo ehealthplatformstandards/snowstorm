@@ -15,10 +15,9 @@ import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import static co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders.bool;
 import static io.kaicode.elasticvc.helper.QueryHelper.termQuery;
@@ -80,7 +79,14 @@ public class CodeSystemVersionService {
         }
 
         LOGGER.debug("Looking for {}'s dependency version.", codeSystemVersion);
-		final String cacheKey = buildKeyForCache(codeSystemVersion, branchService.findLatest(codeSystemVersion.getBranchPath()).getHeadTimestamp());
+
+		Branch latestBranch = branchService.findLatest(codeSystemVersion.getBranchPath());
+		if (latestBranch == null) {
+			LOGGER.error("Latest branch not found for {}. Ignoring this CodeSystem.", codeSystemVersion);
+			return;
+		}
+
+		final String cacheKey = buildKeyForCache(codeSystemVersion, latestBranch.getHeadTimestamp());
 		Integer dependantVersion = dependantVersionCache.computeIfAbsent(cacheKey, key -> {
 			LOGGER.debug("CodeSystemVersion '{}' not found in cache.", codeSystemVersion);
 			Optional<Integer> optionalDependency = doGetDependantVersionForCodeSystemVersion(codeSystemVersion);
@@ -125,5 +131,61 @@ public class CodeSystemVersionService {
 
     private String buildKeyForCache(CodeSystemVersion codeSystemVersion, long headTimestamp) {
         return codeSystemVersion.getShortName() + "_" + codeSystemVersion.getEffectiveDate() + "_" + headTimestamp;
+    }
+
+    /**
+     * Find compatible versions across all codeSystems for a given target dependent version
+     */
+    public List<Integer> findCompatibleVersions(Set<CodeSystem> codeSystems, Integer targetDependantVersion) {
+        if (codeSystems.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        return codeSystems.stream()
+                .map(dependency -> getCompatibleVersionsForDependency(dependency, targetDependantVersion))
+                .reduce(this::intersectSets)
+                .orElse(Collections.emptySet())
+                .stream()
+                .sorted()
+                .toList();
+    }
+
+    private Set<Integer> getCompatibleVersionsForDependency(CodeSystem dependency, Integer targetDependantVersion) {
+        List<CodeSystemVersion> versions = codeSystemService.findAllVersionsAfterEffectiveTime(
+                dependency.getShortName(), targetDependantVersion, true, true);
+        
+        return versions.stream()
+                .map(version -> getVersionValue(version, dependency.getShortName()))
+                .filter(Objects::nonNull)
+                .filter(versionValue -> versionValue >= targetDependantVersion)
+                .collect(Collectors.toSet());
+    }
+
+    private Integer getVersionValue(CodeSystemVersion version, String shortName) {
+        if (SNOMEDCT.equals(shortName)) {
+            return version.getEffectiveDate();
+        } else {
+            if (version.getDependantVersionEffectiveTime() == null) {
+                populateDependantVersion(version);
+            }
+            return version.getDependantVersionEffectiveTime();
+        }
+    }
+
+    private Set<Integer> intersectSets(Set<Integer> set1, Set<Integer> set2) {
+        Set<Integer> result = new HashSet<>(set1);
+        result.retainAll(set2);
+        return result;
+    }
+
+    public CodeSystemVersion findVersionByCodeSystemAndDependentVersion(String shortName, Integer dependentVersion, boolean includeFutureVersions, boolean includeInternalReleases) {
+       List<CodeSystemVersion> allVersionsInDescendingOrder = codeSystemService.findAllVersions(shortName, false, includeFutureVersions, includeInternalReleases);
+       for (CodeSystemVersion version : allVersionsInDescendingOrder) {
+           populateDependantVersion(version);
+           if (dependentVersion.equals(version.getDependantVersionEffectiveTime())) {
+               return version;
+           }
+       }
+       return null;
     }
 }

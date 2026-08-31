@@ -1,12 +1,15 @@
 package org.snomed.snowstorm.core.rf2.export;
 
+import io.kaicode.elasticvc.api.BranchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.snomed.snowstorm.AbstractTest;
 import org.snomed.snowstorm.TestConfig;
+import org.snomed.snowstorm.config.Config;
 import org.snomed.snowstorm.core.data.domain.*;
 import org.snomed.snowstorm.core.data.domain.jobs.ExportConfiguration;
+import org.snomed.snowstorm.core.data.domain.jobs.ExportStatus;
 import org.snomed.snowstorm.core.data.services.*;
 import org.snomed.snowstorm.core.rf2.RF2Constants;
 import org.snomed.snowstorm.core.rf2.RF2Type;
@@ -19,15 +22,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.io.OutputStream;
+import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.snomed.snowstorm.config.Config.PAGE_OF_ONE;
+import static org.snomed.snowstorm.core.data.domain.Concepts.*;
+import static org.snomed.snowstorm.core.data.domain.Concepts.MODULE;
 
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = TestConfig.class)
@@ -52,6 +55,9 @@ class ExportServiceTest extends AbstractTest {
 
 	@Autowired
 	private IdentifierComponentService identifierComponentService;
+
+	@Autowired
+	private BranchService branchService;
 
 	private String descriptionId;
 	private String textDefId;
@@ -114,7 +120,11 @@ class ExportServiceTest extends AbstractTest {
 
 		// add concrete attribute MRCM range constraint for data type
 		createRangeConstraint("1142135004", "dec(>#0..)");
+		// Concrete inferred relationship
 		concept.addRelationship(new Relationship("125024", null, true, Concepts.CORE_MODULE, conceptId, "#100", 0, "1142135004", Concepts.INFERRED_RELATIONSHIP,
+				Concepts.EXISTENTIAL));
+		// Concrete Additional relationship
+		concept.addRelationship(new Relationship("125025", null, true, Concepts.CORE_MODULE, conceptId, "\"PPA23080/021/002\"", 0, "680041000220101", ADDITIONAL_RELATIONSHIP,
 				Concepts.EXISTENTIAL));
 		conceptService.create(concept, path);
 
@@ -195,13 +205,16 @@ class ExportServiceTest extends AbstractTest {
 			assertTrue(lines.contains("125022\t\t1\t900000000000207008\t123001\t100002\t0\t116680003\t900000000000011006\t900000000000451002"));
 			assertTrue(lines.contains("125023\t\t1\t900000000000207008\t123001\t100003\t0\t116680003\t900000000000227009\t900000000000451002"));
 
-			// Inferred (non-concrete) Relationships
+			// Concrete Relationships
 			ZipEntry concreteRelationships = zipInputStream.getNextEntry();
 			assertEquals("SnomedCT_Export/Delta/Terminology/sct2_RelationshipConcreteValues_Delta_INT_20210731.txt", concreteRelationships.getName());
 			lines = getLines(zipInputStream);
-			assertEquals(2, lines.size());
+			assertEquals(3, lines.size());
 			assertEquals(RF2Constants.CONCRETE_RELATIONSHIP_HEADER, lines.get(0));
+			// Inferred type concrete relationship
 			assertTrue(lines.contains("125024\t\t1\t900000000000207008\t123001\t#100\t0\t1142135004\t900000000000011006\t900000000000451002"));
+			// Additional type concrete relationship
+			assertTrue(lines.contains("125025\t\t1\t900000000000207008\t123001\t\"PPA23080/021/002\"\t0\t680041000220101\t900000000000227009\t900000000000451002"));
 
 			// Identifier
 			ZipEntry identifierTypes = zipInputStream.getNextEntry();
@@ -303,13 +316,16 @@ class ExportServiceTest extends AbstractTest {
 			assertTrue(lines.contains("125022\t\t1\t900000000000207008\t123001\t100002\t0\t116680003\t900000000000011006\t900000000000451002"));
 			assertTrue(lines.contains("125023\t\t1\t900000000000207008\t123001\t100003\t0\t116680003\t900000000000227009\t900000000000451002"));
 
-			// Inferred (non-concrete) Relationships
+			// Concrete Relationships
 			ZipEntry concreteRelationships = zipInputStream.getNextEntry();
 			assertEquals("SnomedCT_Export/Delta/Terminology/sct2_RelationshipConcreteValues_Delta_US_20210801.txt", concreteRelationships.getName());
 			lines = getLines(zipInputStream);
-			assertEquals(2, lines.size());
+			assertEquals(3, lines.size());
 			assertEquals(RF2Constants.CONCRETE_RELATIONSHIP_HEADER, lines.get(0));
+			// Inferred type concrete relationship
 			assertTrue(lines.contains("125024\t\t1\t900000000000207008\t123001\t#100\t0\t1142135004\t900000000000011006\t900000000000451002"));
+			// Additional type concrete relationship
+			assertTrue(lines.contains("125025\t\t1\t900000000000207008\t123001\t\"PPA23080/021/002\"\t0\t680041000220101\t900000000000227009\t900000000000451002"));
 
 			// Identifier
 			ZipEntry identifierTypes = zipInputStream.getNextEntry();
@@ -408,13 +424,16 @@ class ExportServiceTest extends AbstractTest {
 			assertTrue(lines.contains("125022\t\t1\t900000000000207008\t123001\t100002\t0\t116680003\t900000000000011006\t900000000000451002"));
 			assertTrue(lines.contains("125023\t\t1\t900000000000207008\t123001\t100003\t0\t116680003\t900000000000227009\t900000000000451002"));
 
-			// Inferred (non-concrete) Relationships
+			// Concrete Relationships
 			ZipEntry concreteRelationships = zipInputStream.getNextEntry();
 			assertEquals("SnomedCT_Export/RF2Release/Terminology/sct2_RelationshipConcreteValues_Delta_INT_20210731.txt", concreteRelationships.getName());
 			lines = getLines(zipInputStream);
-			assertEquals(2, lines.size());
+			assertEquals(3, lines.size());
 			assertEquals(RF2Constants.CONCRETE_RELATIONSHIP_HEADER, lines.get(0));
+			// Inferred type concrete relationship
 			assertTrue(lines.contains("125024\t\t1\t900000000000207008\t123001\t#100\t0\t1142135004\t900000000000011006\t900000000000451002"));
+			// Additional type concrete relationship
+			assertTrue(lines.contains("125025\t\t1\t900000000000207008\t123001\t\"PPA23080/021/002\"\t0\t680041000220101\t900000000000227009\t900000000000451002"));
 
 			// Identifier
 			ZipEntry identifierTypes = zipInputStream.getNextEntry();
@@ -497,13 +516,16 @@ class ExportServiceTest extends AbstractTest {
 			assertTrue(lines.contains("125022\t\t1\t900000000000207008\t123001\t100002\t0\t116680003\t900000000000011006\t900000000000451002"));
 			assertTrue(lines.contains("125023\t\t1\t900000000000207008\t123001\t100003\t0\t116680003\t900000000000227009\t900000000000451002"));
 
-			// Inferred (non-concrete) Relationships
+			// Concrete Relationships
 			ZipEntry concreteRelationships = zipInputStream.getNextEntry();
 			assertEquals("SnomedCT_Export/RF2Release/Terminology/sct2_RelationshipConcreteValues_Delta_INT_20210731.txt", concreteRelationships.getName());
 			lines = getLines(zipInputStream);
-			assertEquals(2, lines.size());
+			assertEquals(3, lines.size());
 			assertEquals(RF2Constants.CONCRETE_RELATIONSHIP_HEADER, lines.get(0));
+			// Inferred type concrete relationship
 			assertTrue(lines.contains("125024\t\t1\t900000000000207008\t123001\t#100\t0\t1142135004\t900000000000011006\t900000000000451002"));
+			// Additional type concrete relationship
+			assertTrue(lines.contains("125025\t\t1\t900000000000207008\t123001\t\"PPA23080/021/002\"\t0\t680041000220101\t900000000000227009\t900000000000451002"));
 
 
 			// Identifier
@@ -742,6 +764,298 @@ class ExportServiceTest extends AbstractTest {
 				}
 			}
 		}
+	}
+
+	@Test
+	void exportRF2Archive_ShouldIncludeTransientEffectiveTime_WhenGivenMDRS() throws IOException {
+		// Prepare for export
+		File exportFile = getTempFile("export", ".zip");
+		exportFile.deleteOnExit();
+
+		// Create simple mdrs entry
+		ReferenceSetMember mdrs = new ReferenceSetMember(Concepts.CORE_MODULE, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, Concepts.MODEL_MODULE);
+		referenceSetMemberService.createMember("MAIN", mdrs);
+
+		// Export content
+		try (FileOutputStream outputStream = new FileOutputStream(exportFile)) {
+			ExportConfiguration exportConfiguration = new ExportConfiguration("MAIN", RF2Type.SNAPSHOT);
+			exportConfiguration.setTransientEffectiveTime("20250101");
+			exportService.createJob(exportConfiguration);
+			exportService.exportRF2Archive(exportConfiguration, outputStream);
+		}
+
+		// Assert
+		try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(exportFile))) {
+			ZipEntry zipEntry;
+			while ((zipEntry = zipInputStream.getNextEntry()) != null) {
+				if (zipEntry.getName().contains("ModuleDependency")) {
+					List<String> lines = getLines(zipInputStream);
+					assertEquals(2, lines.size());
+					assertEquals("id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tsourceEffectiveTime\ttargetEffectiveTime", lines.get(0));
+					assertEquals(mdrs.getMemberId() + "\t20250101\t1\t900000000000207008\t900000000000534007\t900000000000012004\t20250101\t20250101", lines.get(1));
+				}
+			}
+		}
+	}
+
+	@Test
+	void exportRF2Archive_ShouldExportExpectedMDRS_WhenGivenExtension() throws ServiceException, IOException {
+		CodeSystem codeSystem;
+		Concept concept;
+		ReferenceSetMember mdrs;
+
+		// Create International
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+
+		// International creates new module
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Drugs module (module)").setTypeId(FSN))
+						.addDescription(new Description("Drugs module").setTypeId(SYNONYM))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				"MAIN"
+		);
+		String drugsModuleId = concept.getConceptId();
+
+		// International adds content to new module
+		concept = conceptService.create(
+				new Concept()
+						.setModuleId(drugsModuleId)
+						.addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setModuleId(drugsModuleId))
+						.addDescription(new Description("Medicine").setTypeId(SYNONYM).setModuleId(drugsModuleId))
+						.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT).setModuleId(drugsModuleId)),
+				"MAIN"
+		);
+
+		// Create International MDRS
+		mdrs = new ReferenceSetMember(Concepts.CORE_MODULE, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, Concepts.MODEL_MODULE);
+		referenceSetMemberService.createMember("MAIN", mdrs);
+
+		mdrs = new ReferenceSetMember(drugsModuleId, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, CORE_MODULE);
+		referenceSetMemberService.createMember("MAIN", mdrs);
+
+		// Version International
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Create Extension
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+		concept = conceptService.create(
+				new Concept()
+						.addDescription(new Description("Extension module (module)").setTypeId(FSN))
+						.addDescription(new Description("Extension module").setTypeId(SYNONYM))
+						.addAxiom(new Relationship(ISA, MODULE)),
+				"MAIN/SNOMEDCT-XX"
+		);
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata(
+				"MAIN/SNOMEDCT-XX",
+				Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId,
+						Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId),
+						Config.DEPENDENCY_PACKAGE, "20250101.zip"
+				)
+		);
+
+		// Create Extension MDRS
+		mdrs = new ReferenceSetMember(extModuleId, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, CORE_MODULE);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		mdrs = referenceSetMemberService.createMember("MAIN/SNOMEDCT-XX", mdrs);
+		String extMdrsId = mdrs.getMemberId();
+
+		// Version Extension
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20250102, "20250102");
+
+		// Assert Extension post versioning
+		mdrs = referenceSetMemberService.findMember("MAIN/SNOMEDCT-XX", extMdrsId);
+		assertTrue(mdrs.isReleased());
+		assertEquals(20250102, mdrs.getEffectiveTimeI());
+		assertEquals(20250102, mdrs.getReleasedEffectiveTime());
+		assertEquals("20250102", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME));
+		assertEquals("20250101", mdrs.getAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME));
+
+		List<String> lines = getFileFromSnapshotExport("MAIN/SNOMEDCT-XX", "ModuleDependency");
+		assertEquals(2, lines.size());
+		assertEquals("id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tsourceEffectiveTime\ttargetEffectiveTime", lines.get(0));
+		assertEquals(extMdrsId + "\t20250102\t1\t" + extModuleId + "\t900000000000534007\t" + CORE_MODULE + "\t20250102\t20250101", lines.get(1));
+	}
+
+	@Test
+	void exportRF2Archive_ShouldExportDifferentMDRS_WhenGivenInternationalAndExtension() throws ServiceException, IOException {
+		CodeSystem codeSystem;
+		Concept concept;
+		ReferenceSetMember mdrs;
+
+		// Create International
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+
+		// International creates new module
+		concept = conceptService.create(new Concept().addDescription(new Description("Drugs module (module)").setTypeId(FSN)).addDescription(new Description("Drugs module").setTypeId(SYNONYM)).addAxiom(new Relationship(ISA, MODULE)), "MAIN");
+		String drugsModuleId = concept.getConceptId();
+
+		// International adds content to new module
+		concept = conceptService.create(new Concept().setModuleId(drugsModuleId).addDescription(new Description("Medicine (medicine)").setTypeId(FSN).setModuleId(drugsModuleId)).addDescription(new Description("Medicine").setTypeId(SYNONYM).setModuleId(drugsModuleId)).addAxiom(new Relationship(ISA, SNOMEDCT_ROOT).setModuleId(drugsModuleId)), "MAIN");
+
+		// Create International MDRS
+		mdrs = new ReferenceSetMember(Concepts.CORE_MODULE, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, Concepts.MODEL_MODULE);
+		referenceSetMemberService.createMember("MAIN", mdrs);
+
+		mdrs = new ReferenceSetMember(drugsModuleId, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, CORE_MODULE);
+		referenceSetMemberService.createMember("MAIN", mdrs);
+
+		// Version International
+		codeSystemService.createVersion(codeSystem, 20250101, "20250101");
+
+		// Create Extension
+		codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+		concept = conceptService.create(new Concept().addDescription(new Description("Extension module (module)").setTypeId(FSN)).addDescription(new Description("Extension module").setTypeId(SYNONYM)).addAxiom(new Relationship(ISA, MODULE)), "MAIN/SNOMEDCT-XX");
+		String extModuleId = concept.getConceptId();
+		branchService.updateMetadata("MAIN/SNOMEDCT-XX", Map.of(Config.DEFAULT_MODULE_ID_KEY, extModuleId, Config.EXPECTED_EXTENSION_MODULES, List.of(extModuleId), Config.DEPENDENCY_PACKAGE, "20250101.zip"));
+
+		// Create Extension MDRS
+		mdrs = new ReferenceSetMember(extModuleId, Concepts.MODULE_DEPENDENCY_REFERENCE_SET, CORE_MODULE);
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.SOURCE_EFFECTIVE_TIME, "");
+		mdrs.setAdditionalField(ReferenceSetMember.MDRSFields.TARGET_EFFECTIVE_TIME, "20250101");
+		mdrs = referenceSetMemberService.createMember("MAIN/SNOMEDCT-XX", mdrs);
+
+		// Version Extension
+		codeSystem = codeSystemService.find("SNOMEDCT-XX");
+		codeSystemService.createVersion(codeSystem, 20250102, "20250102");
+
+		// Assert
+		List<String> intMain = getFileFromSnapshotExport("MAIN", "ModuleDependency");
+		List<String> intVersion = getFileFromSnapshotExport("MAIN/2025-01-01", "ModuleDependency");
+		List<String> extMain = getFileFromSnapshotExport("MAIN/SNOMEDCT-XX", "ModuleDependency");
+		List<String> extVersion = getFileFromSnapshotExport("MAIN/SNOMEDCT-XX/2025-01-02", "ModuleDependency");
+
+		assertEquals(intMain, intVersion);
+		assertEquals(extMain, extVersion);
+		assertNotEquals(intMain, extMain);
+		assertNotEquals(intVersion, extVersion);
+	}
+
+	@Test
+	void exportRF2Archive_ShouldExportQueryReferenceSet() throws ServiceException, IOException {
+		Concept concept;
+		String intMain = "MAIN";
+
+		// Create International
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", intMain));
+
+		// Create reference set hierarchy
+		concept = new Concept("900000000000455006")
+				.addDescription(new Description("Reference set (foundation metadata concept)").setTypeId(FSN))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT));
+		String referenceSetId = conceptService.create(concept, intMain).getConceptId();
+
+		concept = new Concept("900000000000512005")
+				.addDescription(new Description("Query specification type reference set (foundation metadata concept)").setTypeId(FSN))
+				.addAxiom(new Relationship(ISA, referenceSetId))
+				.addRelationship(new Relationship(ISA, referenceSetId));
+		String queryRefsetId = conceptService.create(concept, intMain).getConceptId();
+
+		concept = new Concept("900000000000513000")
+				.addDescription(new Description("Simple query specification reference set (foundation metadata concept)").setTypeId(FSN))
+				.addAxiom(new Relationship(ISA, queryRefsetId))
+				.addRelationship(new Relationship(ISA, queryRefsetId));
+		String simpleQueryRefsetId = conceptService.create(concept, intMain).getConceptId();
+
+		concept = new Concept()
+				.addDescription(new Description("Laterality query reference set (foundation metadata concept)").setTypeId(FSN))
+				.addAxiom(new Relationship(ISA, simpleQueryRefsetId))
+				.addRelationship(new Relationship(ISA, simpleQueryRefsetId));
+		String lateralityQueryRefsetId = conceptService.create(concept, intMain).getConceptId();
+
+		// Add member to laterality
+		ReferenceSetMember lateralityMember = referenceSetMemberService.createMember(intMain, new ReferenceSetMember().setActive(true).setModuleId(CORE_MODULE).setRefsetId(simpleQueryRefsetId).setReferencedComponentId(lateralityQueryRefsetId).setAdditionalField(ReferenceSetMember.QueryFields.QUERY, "<< 182353008"));
+
+		// Export
+		List<String> lines = getFileFromSnapshotExport("MAIN", "Query");
+		lines.remove(0); // Remove header
+		assertEquals(1, lines.size());
+		assertTrue((lines.iterator().next().contains(lateralityMember.getMemberId())));
+	}
+
+	@Test
+	void testAxiomsExportedWhenInNonDefaultModule() throws Exception {
+		// Create CodeSystem
+		codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+
+		// Create Axiom
+		String nonDefaultModuleId = "715515008";
+		ReferenceSetMember axiom = new ReferenceSetMember(nonDefaultModuleId, Concepts.OWL_AXIOM_REFERENCE_SET, "123001");
+		axiom.setAdditionalField(ReferenceSetMember.OwlExpressionFields.OWL_EXPRESSION, "SubClassOf(:123001 :100002)");
+		referenceSetMemberService.createMember("MAIN", axiom);
+
+		// Export Axiom
+		List<String> lines = getFileFromSnapshotExport("MAIN", "OWLExpression");
+		assertTrue(lines.stream().anyMatch(line -> line.contains(axiom.getMemberId())));
+	}
+
+	@Test
+	void exportShouldRetryWhenInitiallyLocked() throws ServiceException, IOException {
+		// Create CodeSystem
+		CodeSystem codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT-XX", "MAIN/SNOMEDCT-XX"));
+		String branchPath = codeSystem.getBranchPath();
+
+		// Add Concept
+		Concept concept = conceptService.create(new Concept()
+				.addDescription(new Description("Medicine (medicine)").setTypeId(FSN))
+				.addDescription(new Description("Medicine").setTypeId(SYNONYM))
+				.addAxiom(new Relationship(ISA, SNOMEDCT_ROOT))
+				.addRelationship(new Relationship(ISA, SNOMEDCT_ROOT))
+				.setModuleId(CORE_MODULE), branchPath);
+		String medicineId = concept.getConceptId();
+
+		// CodeSystem starts versioning
+		branchService.lockBranch(branchPath, "Versioning CodeSystem");
+
+		// Prepare to export
+		String exportId = exportService.createJob(new ExportConfiguration(branchPath, RF2Type.DELTA));
+
+		// First export
+		assertThrows(IllegalStateException.class, () -> getFileFromExport(exportId, "sct2_Concept_"));
+
+		// CodeSystem finished versioning
+		branchService.unlock(branchPath);
+
+		// Export again
+		List<String> lines = getFileFromExport(exportId, "sct2_Concept_");
+		assertTrue(lines.stream().anyMatch(line -> line.contains(medicineId)));
+	}
+
+	private List<String> getFileFromSnapshotExport(String branchPath, String fileName) throws IOException {
+		ExportConfiguration exportConfiguration = new ExportConfiguration(branchPath, RF2Type.SNAPSHOT);
+		exportService.createJob(exportConfiguration);
+		return getFileFromExport(exportConfiguration, fileName);
+	}
+
+	private List<String> getFileFromExport(String exportId, String fileName) throws IOException {
+		return getFileFromExport(exportService.getExportJobOrThrow(exportId), fileName);
+	}
+
+	private List<String> getFileFromExport(ExportConfiguration exportConfiguration, String fileName) throws IOException {
+		// Prepare for export
+		File exportFile = getTempFile("export", ".zip");
+		exportFile.deleteOnExit();
+
+		// Export content
+		try (FileOutputStream outputStream = new FileOutputStream(exportFile)) {
+			exportService.exportRF2Archive(exportConfiguration, outputStream);
+		}
+
+		// Walk zip
+		try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(exportFile))) {
+			ZipEntry zipEntry;
+			while ((zipEntry = zipInputStream.getNextEntry()) != null) {
+				if (zipEntry.getName().contains(fileName)) {
+					return getLines(zipInputStream);
+				}
+			}
+		}
+
+		return Collections.emptyList();
 	}
 
 	void printLines(List<String> lines) {

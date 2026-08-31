@@ -1,17 +1,10 @@
 package org.snomed.snowstorm.fhir.config;
 
-import ca.uhn.fhir.rest.api.Constants;
 import ca.uhn.fhir.rest.api.EncodingEnum;
-import ca.uhn.fhir.rest.api.server.RequestDetails;
-import ca.uhn.fhir.rest.server.interceptor.ResponseHighlighterInterceptor;
-import org.hl7.fhir.instance.model.api.IBaseConformance;
-import org.hl7.fhir.r4.model.CapabilityStatement;
-import org.hl7.fhir.r4.model.StringType;
-import org.hl7.fhir.r4.model.TerminologyCapabilities;
-import org.snomed.snowstorm.core.data.services.CodeSystemService;
 import org.snomed.snowstorm.fhir.services.FHIRCodeSystemService;
 import org.snomed.snowstorm.fhir.services.FHIRLoadPackageServlet;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -22,39 +15,28 @@ import org.springframework.context.annotation.Lazy;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.file.attribute.PosixFilePermissions;
 
 @Configuration
 public class FHIRRestConfig {
 
 	private static final int MB_IN_BYTES = 1024 * 1024;
 
+	@Value("${snowstorm.rest-api.allowAnyOrigin:true}")
+	private boolean allowAnyOrigin;
+
 	@Bean
 	public ServletRegistrationBean<HapiRestfulServlet> hapi(
 			@Autowired(required = false) BuildProperties buildProperties,
 			@Autowired @Lazy FHIRCodeSystemService codeSystemService) {
 
-		HapiRestfulServlet hapiServlet = new HapiRestfulServlet(buildProperties, codeSystemService);
+		HapiRestfulServlet hapiServlet = new HapiRestfulServlet(buildProperties, codeSystemService, allowAnyOrigin);
 
-		ServletRegistrationBean<HapiRestfulServlet> servletRegistrationBean = new ServletRegistrationBean<>(hapiServlet, "/fhir/*");
-		hapiServlet.setServerName("SnowstormX FHIR Server");
+		// "/fhir" is required in addition to "/fhir/*" so the base URL matches the servlet (spec: path "/fhir" alone does not match "/fhir/*").
+		ServletRegistrationBean<HapiRestfulServlet> servletRegistrationBean = new ServletRegistrationBean<>(hapiServlet, "/fhir", "/fhir/*");
+		hapiServlet.setServerName("Snowstorm FHIR Server");
 		hapiServlet.setServerVersion(buildProperties != null ? buildProperties.getVersion() : "development");
 		hapiServlet.setDefaultResponseEncoding(EncodingEnum.JSON);
-
-		hapiServlet.registerInterceptor(new ResponseHighlighterInterceptor() {
-			@Override
-			public void capabilityStatementGenerated(RequestDetails theRequestDetails, IBaseConformance theCapabilityStatement) {
-				if (theCapabilityStatement instanceof CapabilityStatement statement) {
-					statement.setPublisherElement(new StringType("SNOMED International"));
-					statement.setFormat(new ArrayList<>());
-					statement.addFormat(Constants.CT_FHIR_JSON_NEW);
-					statement.addFormat(Constants.CT_FHIR_XML_NEW);
-					super.capabilityStatementGenerated(theRequestDetails, theCapabilityStatement);
-				}
-			}
-		});
-
 
 		return servletRegistrationBean;
 	}
@@ -63,8 +45,20 @@ public class FHIRRestConfig {
 	public ServletRegistrationBean<FHIRLoadPackageServlet> addBundleServlet() throws IOException {
 		ServletRegistrationBean<FHIRLoadPackageServlet> registrationBean = new ServletRegistrationBean<>(new FHIRLoadPackageServlet(), "/fhir-admin/load-package");
 		registrationBean.setMultipartConfig(
-				new MultipartConfigElement(Files.createTempDirectory("fhir-bundle-upload").toFile().getAbsolutePath(), MB_IN_BYTES * 200, MB_IN_BYTES * 200, 0));
+				new MultipartConfigElement(createSecureUploadDir(), MB_IN_BYTES * 200L, MB_IN_BYTES * 200L, 0));
 		return registrationBean;
+	}
+
+	// Creates an upload directory accessible by the owner only, avoiding the world-writable default of the shared temp directory.
+	private static String createSecureUploadDir() throws IOException {
+		try {
+			return Files.createTempDirectory("fhir-bundle-upload",
+					PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
+					.toAbsolutePath().toString();
+		} catch (UnsupportedOperationException e) {
+			// Non-POSIX filesystem (e.g. Windows), where the per-user temp directory is already private.
+			return Files.createTempDirectory("fhir-bundle-upload").toAbsolutePath().toString();
+		}
 	}
 
 }

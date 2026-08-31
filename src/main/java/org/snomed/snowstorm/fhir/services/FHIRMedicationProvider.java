@@ -14,7 +14,6 @@ import org.snomed.snowstorm.core.pojo.LanguageDialect;
 import org.snomed.snowstorm.core.pojo.TermLangPojo;
 import org.snomed.snowstorm.fhir.config.FHIRConstants;
 import org.snomed.snowstorm.rest.ControllerHelper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,12 +26,15 @@ import static org.snomed.snowstorm.fhir.services.FHIRHelper.exception;
 @Component
 public class FHIRMedicationProvider implements IResourceProvider, FHIRConstants {
 
-	@Autowired
-	private ConceptService conceptService;
+	private final ConceptService conceptService;
 
-	@Autowired
-	private FHIRHelper fhirHelper;
-	
+	private final FHIRHelper fhirHelper;
+
+	public FHIRMedicationProvider(ConceptService conceptService, FHIRHelper fhirHelper) {
+		this.conceptService = conceptService;
+		this.fhirHelper = fhirHelper;
+	}
+
 	//TOODO Implement Find Resource taking filters for strength, ingredient and dose form
 	
 	@Read()
@@ -97,7 +99,7 @@ public class FHIRMedicationProvider implements IResourceProvider, FHIRConstants 
 			i.setStrength(ratio);
 			medication.addIngredient(i);
 		}
-		if (medication.getIngredient().size() == 0) {
+		if (medication.getIngredient().isEmpty()) {
 			throw exception("the concept does not have properties mapped to FHIR Medication Resource.", IssueType.CODEINVALID, 400);
 		} else {
 			// Generate Narrative TODO: implement automatic generation with context

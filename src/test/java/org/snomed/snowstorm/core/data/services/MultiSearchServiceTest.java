@@ -2,12 +2,14 @@ package org.snomed.snowstorm.core.data.services;
 
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.ErrorResponse;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.snomed.snowstorm.AbstractTest;
 import org.snomed.snowstorm.TestConfig;
 import org.snomed.snowstorm.core.data.domain.CodeSystem;
+import org.snomed.snowstorm.core.data.domain.CodeSystemVersion;
 import org.snomed.snowstorm.core.data.domain.Concept;
 import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.domain.Description;
@@ -20,6 +22,7 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @ExtendWith(SpringExtension.class)
 @ContextConfiguration(classes = TestConfig.class)
@@ -30,9 +33,6 @@ class MultiSearchServiceTest extends AbstractTest {
 
 	@Autowired
 	private CodeSystemService codeSystemService;
-
-	@Autowired
-	private CodeSystemUpgradeService codeSystemUpgradeService;
 
 	@Autowired
 	private ConceptService conceptService;
@@ -70,7 +70,7 @@ class MultiSearchServiceTest extends AbstractTest {
 		codeSystemService.createVersion(codeSystemInternational, 20200131, "");
 
 		clinicalFinding = conceptService.find(Concepts.CLINICAL_FINDING, "MAIN");
-		assertFalse(clinicalFinding.isActive());
+		Assertions.assertFalse(clinicalFinding.isActive());
 
 		// search both
 		descriptions = runSearch(term);
@@ -94,6 +94,67 @@ class MultiSearchServiceTest extends AbstractTest {
 
 	}
 
+	@Test
+	void testFindDescriptionsWholeWord() throws ServiceException {
+		CodeSystem codeSystemInternational = new CodeSystem("SNOMEDCT", "MAIN");
+		codeSystemService.createCodeSystem(codeSystemInternational);
+		testUtil.createConceptWithPathIdAndTerm("MAIN", Concepts.CLINICAL_FINDING, "Clinical finding");
+		codeSystemService.createVersion(codeSystemInternational, 20190731, " Int 2019-07-31");
+
+		CodeSystem codeSystemBE = new CodeSystem("SNOMEDCT-BE", "MAIN/SNOMEDCT-BE");
+		codeSystemService.createCodeSystem(codeSystemBE);
+		testUtil.createConceptWithPathIdAndTerm("MAIN/SNOMEDCT-BE", "123123404684003", "Some finding");
+		codeSystemService.createVersion(codeSystemBE, 20190931, "");
+
+		assertEquals(2, runSearch("fin").getTotalElements(), "Prefix search matches both descriptions.");
+		assertEquals(0, runSearch("fin", DescriptionService.SearchMode.WHOLE_WORD).getTotalElements(),
+				"Prefix is not a whole word.");
+		assertEquals(2, runSearch("finding", DescriptionService.SearchMode.WHOLE_WORD).getTotalElements(),
+				"Whole-word search matches both descriptions containing 'finding'.");
+		assertEquals(1, runSearch("Clinical", DescriptionService.SearchMode.WHOLE_WORD).getTotalElements(),
+				"Whole-word search matches only the description containing that word.");
+	}
+
+	@Test
+	void testFindDescriptionsExact() throws ServiceException {
+		CodeSystem codeSystemInternational = new CodeSystem("SNOMEDCT", "MAIN");
+		codeSystemService.createCodeSystem(codeSystemInternational);
+		testUtil.createConceptWithPathIdAndTerm("MAIN", Concepts.CLINICAL_FINDING, "Clinical finding");
+		codeSystemService.createVersion(codeSystemInternational, 20190731, " Int 2019-07-31");
+
+		CodeSystem codeSystemBE = new CodeSystem("SNOMEDCT-BE", "MAIN/SNOMEDCT-BE");
+		codeSystemService.createCodeSystem(codeSystemBE);
+		testUtil.createConceptWithPathIdAndTerm("MAIN/SNOMEDCT-BE", "123123404684003", "Some finding");
+		codeSystemService.createVersion(codeSystemBE, 20190931, "");
+
+		assertEquals(0, runSearch("finding", DescriptionService.SearchMode.EXACT).getTotalElements(),
+				"Exact search does not match a word inside a longer term.");
+		assertEquals(1, runSearch("Clinical finding", DescriptionService.SearchMode.EXACT).getTotalElements(),
+				"Exact search matches the full description term.");
+		assertEquals(1, runSearch("clinical finding", DescriptionService.SearchMode.EXACT).getTotalElements(),
+				"Exact search is case-insensitive.");
+		assertEquals(1, runSearch("Some finding", DescriptionService.SearchMode.EXACT).getTotalElements(),
+				"Exact search matches the other full description term.");
+		assertEquals(2, runSearch("finding", DescriptionService.SearchMode.WHOLE_WORD).getTotalElements(),
+				"Whole-word search still matches descriptions containing that word.");
+	}
+
+	@Test
+	void getAllPublishedVersionsInvalidatesCacheOnVersionDelete() throws ServiceException {
+		CodeSystem codeSystem = codeSystemService.createCodeSystem(new CodeSystem("SNOMEDCT", "MAIN"));
+		testUtil.createConceptWithPathIdAndTerm("MAIN", Concepts.CLINICAL_FINDING, "Clinical finding");
+		codeSystemService.createVersion(codeSystem, 20190731, "Int 2019-07-31");
+		codeSystemService.createVersion(codeSystem, 20200131, "Int 2020-01-31");
+
+		assertEquals(2, multiSearchService.getAllPublishedVersions().size());
+
+		CodeSystemVersion olderVersion = codeSystemService.findVersion("SNOMEDCT", 20190731);
+		codeSystemService.deleteVersion(codeSystem, olderVersion);
+
+		assertEquals(1, multiSearchService.getAllPublishedVersions().size());
+		assertEquals(20200131, multiSearchService.getAllPublishedVersions().iterator().next().getEffectiveDate());
+	}
+
 
 	@Test
 	void testExceptionHandling() {
@@ -107,16 +168,26 @@ class MultiSearchServiceTest extends AbstractTest {
 	}
 
 	private Page<Description> runSearch(String term) {
-		MultiSearchDescriptionCriteria criteria = (MultiSearchDescriptionCriteria) new MultiSearchDescriptionCriteria().term(term);
-		return multiSearchService.findDescriptions(criteria, PageRequest.of(0, 10));
+		return runSearch(term, null, null);
 	}
 
 	private Page<Description> runSearch(String term, Boolean conceptActive) {
-		if (conceptActive == null) {
-			return runSearch(term);
-		} else {
-			MultiSearchDescriptionCriteria criteria = (MultiSearchDescriptionCriteria) new MultiSearchDescriptionCriteria().term(term).conceptActive(conceptActive);
-			return multiSearchService.findDescriptions(criteria, PageRequest.of(0, 10));
+		return runSearch(term, conceptActive, null);
+	}
+
+	private Page<Description> runSearch(String term, DescriptionService.SearchMode searchMode) {
+		return runSearch(term, null, searchMode);
+	}
+
+	private Page<Description> runSearch(String term, Boolean conceptActive, DescriptionService.SearchMode searchMode) {
+		MultiSearchDescriptionCriteria criteria = new MultiSearchDescriptionCriteria();
+		if (searchMode != null) {
+			criteria.searchMode(searchMode);
 		}
+		criteria.term(term);
+		if (conceptActive != null) {
+			criteria.conceptActive(conceptActive);
+		}
+		return multiSearchService.findDescriptions(criteria, PageRequest.of(0, 10));
 	}
 }

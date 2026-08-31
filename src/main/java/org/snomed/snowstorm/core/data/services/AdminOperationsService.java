@@ -27,6 +27,7 @@ import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder;
 import org.springframework.data.elasticsearch.core.query.FetchSourceFilter;
+import org.springframework.data.elasticsearch.core.query.DeleteQuery;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.elasticsearch.repository.ElasticsearchRepository;
@@ -107,8 +108,12 @@ public class AdminOperationsService {
 			descriptionsOnAllBranchesStream.forEachRemaining(hit -> {
 				Description description = hit.getContent();
 				if (exceptionThrown.get() == null) {
+					String termToFold = description.getTerm();
+					if (searchLanguagesConfiguration.getElisionLanguages().contains(languageCode)) {
+						termToFold = DescriptionHelper.stripElisions(termToFold);
+					}
 
-					String newFoldedTerm = DescriptionHelper.foldTerm(description.getTerm(), foldedCharacters);
+					String newFoldedTerm = DescriptionHelper.foldTerm(termToFold, foldedCharacters);
 					descriptionCount.incrementAndGet();
 					if (!newFoldedTerm.equals(description.getTermFolded())) {
 						final Document document = Document.create();
@@ -292,7 +297,8 @@ public class AdminOperationsService {
 
 		logger.info("Deleting all documents on branch {}.", path);
 
-		Query deleteQuery = new NativeQueryBuilder().withQuery(termQuery("path", path)).build();
+		Query query = new NativeQueryBuilder().withQuery(termQuery("path", path)).build();
+		DeleteQuery deleteQuery = DeleteQuery.builder(query).build();
 		for (Class<? extends DomainEntity> domainEntityType : domainEntityConfiguration.getAllDomainEntityTypes()) {
 			logger.info("Deleting all {} type documents on branch {}.", domainEntityType.getSimpleName(), path);
 			elasticsearchOperations.delete(deleteQuery, domainEntityType, elasticsearchOperations.getIndexCoordinatesFor(domainEntityType));
@@ -341,7 +347,7 @@ public class AdminOperationsService {
 		NativeQueryBuilder queryBuilder = new NativeQueryBuilder()
 				.withQuery(bool(b -> b.must(branchCriteria.getEntityBranchCriteria(Relationship.class))
 						.must(termQuery(Relationship.Fields.EFFECTIVE_TIME, effectiveTime))))
-				.withSourceFilter(new FetchSourceFilter(new String[]{Relationship.Fields.RELATIONSHIP_ID}, null))
+				.withSourceFilter(new FetchSourceFilter(null, new String[]{Relationship.Fields.RELATIONSHIP_ID}, null))
 				.withPageable(LARGE_PAGE);
 		try (SearchHitsIterator<Relationship> stream = elasticsearchOperations.searchForStream(queryBuilder.build(), Relationship.class)) {
 			stream.forEachRemaining(hit -> {
@@ -664,7 +670,7 @@ public class AdminOperationsService {
 					try (final SearchHitsIterator<Description> stream = elasticsearchOperations.searchForStream(new NativeQueryBuilder()
 							.withQuery(bool(b -> b.must(branchCriteria.getEntityBranchCriteria(Description.class))
 									.must(termsQuery(Description.Fields.DESCRIPTION_ID, descriptionIds))))
-							.withSourceFilter(new FetchSourceFilter(new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null))
+							.withSourceFilter(new FetchSourceFilter(null, new String[]{Description.Fields.DESCRIPTION_ID, Description.Fields.CONCEPT_ID}, null))
 							.build(), Description.class)) {
 						stream.forEachRemaining(hit -> verifiedConceptIds.add(hit.getContent().getConceptId()));
 					}

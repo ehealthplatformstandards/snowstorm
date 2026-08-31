@@ -16,11 +16,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
 import static org.apache.http.util.TextUtils.isBlank;
-import static org.snomed.snowstorm.SnowstormApplication.getOneValueOrDefault;
 import static org.snomed.snowstorm.syndication.constants.SyndicationConstants.EXTENSION_COUNTRY_CODE;
 import static org.snomed.snowstorm.syndication.constants.SyndicationConstants.LATEST_VERSION;
 
@@ -38,6 +38,17 @@ public class ImportTerminologyService {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private ApplicationArguments applicationArguments;
+
+    private static String getOneValueOrDefault(ApplicationArguments arguments, String name, String defaultValue) {
+        List<String> values = arguments.getOptionValues(name);
+        if (values == null || values.isEmpty()) {
+            return defaultValue;
+        }
+        if (values.size() != 1) {
+            throw new IllegalArgumentException(name + " argument must have exactly one value");
+        }
+        return values.get(0);
+    }
 
     public void handleStartupSyndication(ApplicationArguments appArguments) throws IOException, ServiceException, InterruptedException {
         applicationArguments = appArguments;

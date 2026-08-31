@@ -85,7 +85,9 @@ public class Hl7SyndicationService extends SyndicationService {
     }
 
     private void deleteNoContentCodeSystems(String url) {
-        fhirCodeSystemService.findNotPresentCodeSystemVersion(url).forEach(fhirCodeSystemService::deleteCodeSystemVersion);
+        fhirCodeSystemService.findAllVersionsByUrl(url).stream()
+                .filter(version -> "not-present".equals(version.getContent()))
+                .forEach(fhirCodeSystemService::deleteCodeSystemVersion);
     }
 
     @Override

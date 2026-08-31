@@ -31,8 +31,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Build and package without running tests
-        run: mvn clean package -DskipTests
+      - name: Build and run Maven tests
+        run: mvn --batch-mode clean verify
 
       - name: List the contents of the target directory
         run: ls -la target

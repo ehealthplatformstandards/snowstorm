@@ -33,7 +33,7 @@ jobs:
             ${{ runner.os }}-maven-
 
       - name: Build and run Maven tests
-        run: mvn --batch-mode --no-transfer-progress clean package -Ddependency-check.skip=true
+        run: mvn --batch-mode --no-transfer-progress clean test
 
       - name: List the contents of the target directory
         run: ls -la target

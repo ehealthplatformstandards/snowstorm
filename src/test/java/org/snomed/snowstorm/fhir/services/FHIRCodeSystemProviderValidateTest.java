@@ -2,6 +2,7 @@ package org.snomed.snowstorm.fhir.services;
 
 import org.hl7.fhir.r4.model.Parameters;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -75,7 +76,9 @@ class FHIRCodeSystemProviderValidateTest extends AbstractFHIRTest {
 	}
 
 	@Test
+	@DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
 	void testValidateExpression() {
+		createExpressionRepo();
 		Parameters response = getParameters("/CodeSystem/$validate-code" +
 				"?url=http://snomed.info/sct" +
 				"&version=" + EXPRESSION_REPO_VERSION +

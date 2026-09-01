@@ -23,7 +23,7 @@ class FHIRCodeSystemProviderInstancesTest extends AbstractFHIRTest {
 		expectResponse(response, 200);
 		Bundle bundle = fhirJsonParser.parseResource(Bundle.class, response.getBody());
 		assertNotNull(bundle.getEntry());
-		assertEquals(4, bundle.getEntry().size(), () -> {
+		assertEquals(3, bundle.getEntry().size(), () -> {
 			StringBuilder buffer = new StringBuilder();
 			for (BundleEntryComponent component : bundle.getEntry()) {
 				buffer.append(component.getFullUrl()).append(" ");
@@ -43,7 +43,7 @@ class FHIRCodeSystemProviderInstancesTest extends AbstractFHIRTest {
 		expectResponse(response, 200);
 		Bundle bundle = fhirJsonParser.parseResource(Bundle.class, response.getBody());
 		assertNotNull(bundle.getEntry());
-		assertEquals(4, bundle.getEntry().size());
+		assertEquals(3, bundle.getEntry().size());
 		List<CodeSystem> codeSystems = bundle.getEntry().stream()
 				.map(BundleEntryComponent::getResource)
 				.map(CodeSystem.class::cast)

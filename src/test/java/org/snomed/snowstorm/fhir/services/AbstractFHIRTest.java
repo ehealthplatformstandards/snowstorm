@@ -107,7 +107,6 @@ public class AbstractFHIRTest {
 		headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
 		defaultRequestEntity = new HttpEntity<>(headers);
 
-		createExpressionRepo();
 	}
 
 	protected void createExpressionRepo() {

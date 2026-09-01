@@ -16,6 +16,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.http.*;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -67,6 +68,9 @@ public class AbstractFHIRTest {
 	@Autowired
 	protected FHIRConceptMapRepository conceptMapRepository;
 
+	@Autowired
+	private ElasticsearchOperations elasticsearchOperations;
+
 	@Value("${ims-security.roles.enabled}")
 	private boolean rolesEnabled;
 
@@ -111,6 +115,9 @@ public class AbstractFHIRTest {
 		HttpHeaders headers = new HttpHeaders();
 		headers.add("Content-Type", "application/fhir+json");
 		this.restTemplate.exchange(new RequestEntity<>(CREATE_SUPPLEMENT_REQUEST, headers, HttpMethod.POST, URI.create(url)), String.class);
+		// The CodeSystem endpoint lists native code systems using an Elasticsearch search.
+		// Make the expression repository visible before a test immediately queries it.
+		elasticsearchOperations.indexOps(org.snomed.snowstorm.core.data.domain.CodeSystem.class).refresh();
 	}
 
 	protected void expectResponse(ResponseEntity<String> response, int expectedStatusCode) {

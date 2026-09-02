@@ -21,6 +21,7 @@ import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Properties;
 
 @PropertySource(value = "classpath:application.properties", encoding = "UTF-8")
@@ -103,9 +104,15 @@ public class TestConfig extends Config {
             assert elasticsearchContainer != null;
 			LOGGER.info("Test container Elasticsearch host {} ", elasticsearchContainer.getHttpHostAddress());
             return ClientConfiguration.builder()
-					.connectedTo(elasticsearchContainer.getHttpHostAddress()).build();
+					.connectedTo(elasticsearchContainer.getHttpHostAddress())
+					.withConnectTimeout(Duration.ofSeconds(10))
+					.withSocketTimeout(Duration.ofSeconds(360))
+					.build();
 		}
 		return ClientConfiguration.builder()
-				.connectedTo("localhost:9200").build();
+				.connectedTo("localhost:9200")
+				.withConnectTimeout(Duration.ofSeconds(10))
+				.withSocketTimeout(Duration.ofSeconds(360))
+				.build();
 	}
 }

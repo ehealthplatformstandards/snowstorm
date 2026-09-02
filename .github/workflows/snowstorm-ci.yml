@@ -32,4 +32,19 @@ jobs:
             ${{ runner.os }}-maven-
 
       - name: Build and run Maven tests
-        run: mvn --batch-mode --no-transfer-progress clean test
+        run: mvn --batch-mode --no-transfer-progress clean package
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/features/ako/update_snowstorm_10.12.2'
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
+
+      - name: Build Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/features/ako/update_snowstorm_10.12.2'
+        run: docker build -t ehealthplatformstandards/snowstorm:migration_10.12.2 .
+
+      - name: Push Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/features/ako/update_snowstorm_10.12.2'
+        run: docker push ehealthplatformstandards/snowstorm:migration_10.12.2

@@ -75,6 +75,7 @@ public class CodeSystemService {
 	private final CodeSystemConfigurationService codeSystemConfigurationService;
 	private final CodeSystemQueryService codeSystemQueryService;
 	private final BranchService branchService;
+	private final AdminOperationsService adminOperationsService;
 	private final SBranchService sBranchService;
 	private final ReleaseService releaseService;
 	private final ConceptService conceptService;
@@ -108,6 +109,7 @@ public class CodeSystemService {
 			CodeSystemConfigurationService codeSystemConfigurationService,
 			CodeSystemQueryService codeSystemQueryService,
 			BranchService branchService,
+			@Lazy AdminOperationsService adminOperationsService,
 			@Lazy SBranchService sBranchService,
 			@Lazy ReleaseService releaseService,
 			ConceptService conceptService,
@@ -121,6 +123,7 @@ public class CodeSystemService {
 		this.codeSystemConfigurationService = codeSystemConfigurationService;
 		this.codeSystemQueryService = codeSystemQueryService;
 		this.branchService = branchService;
+		this.adminOperationsService = adminOperationsService;
 		this.sBranchService = sBranchService;
 		this.releaseService = releaseService;
 		this.conceptService = conceptService;
@@ -729,6 +732,12 @@ public class CodeSystemService {
 	@PreAuthorize("hasPermission('ADMIN', #codeSystem.branchPath)")
 	@CacheEvict(value = {"code-systems", "code-system-branches"}, allEntries = true)
 	public void deleteCodeSystemAndVersions(CodeSystem codeSystem) {
+		deleteCodeSystemAndVersions(codeSystem, false);
+	}
+
+	@PreAuthorize("hasPermission('ADMIN', #codeSystem.branchPath)")
+	@CacheEvict(value = {"code-systems", "code-system-branches"}, allEntries = true)
+	public void deleteCodeSystemAndVersions(CodeSystem codeSystem, boolean deleteBranches) {
 		if (codeSystem.getBranchPath().equals("MAIN")) {
 			throw new IllegalArgumentException("The root code system can not be deleted. " +
 					"If you need to start again delete all indices and restart Snowstorm.");
@@ -737,12 +746,13 @@ public class CodeSystemService {
 		List<CodeSystemVersion> allVersions = findAllVersions(codeSystem.getShortName(), true, false);
 		versionRepository.deleteAll(allVersions);
 		repository.delete(codeSystem);
+		if (deleteBranches) {
+			for (CodeSystemVersion version : allVersions) {
+				adminOperationsService.hardDeleteBranch(version.getBranchPath());
+			}
+			adminOperationsService.hardDeleteBranch(codeSystem.getBranchPath());
+		}
 		logger.info("Deleted Code System '{}' and versions.", codeSystem.getShortName());
-	}
-
-	@PreAuthorize("hasPermission('ADMIN', #codeSystem.branchPath)")
-	public void deleteCodeSystemAndVersions(CodeSystem codeSystem, boolean deleteBranches) {
-		deleteCodeSystemAndVersions(codeSystem);
 	}
 
 	protected void setLatestVersionCanBeFuture(boolean latestVersionCanBeFuture) {

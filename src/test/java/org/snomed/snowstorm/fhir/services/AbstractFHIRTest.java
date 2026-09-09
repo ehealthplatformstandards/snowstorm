@@ -113,7 +113,8 @@ public class AbstractFHIRTest {
 		String url = baseUrl + "/CodeSystem";
 		HttpHeaders headers = new HttpHeaders();
 		headers.add("Content-Type", "application/fhir+json");
-		this.restTemplate.exchange(new RequestEntity<>(CREATE_SUPPLEMENT_REQUEST, headers, HttpMethod.POST, URI.create(url)), String.class);
+		ResponseEntity<String> response = this.restTemplate.exchange(new RequestEntity<>(CREATE_SUPPLEMENT_REQUEST, headers, HttpMethod.POST, URI.create(url)), String.class);
+		assertTrue(response.getStatusCode().is2xxSuccessful(), () -> "Failed to create expression repository: " + response.getStatusCode() + " " + response.getBody());
 		// The CodeSystem endpoint lists native code systems using an Elasticsearch search.
 		// Make the expression repository visible before a test immediately queries it.
 		elasticsearchOperations.indexOps(org.snomed.snowstorm.core.data.domain.CodeSystem.class).refresh();

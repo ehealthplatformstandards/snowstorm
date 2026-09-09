@@ -59,6 +59,24 @@ class CodeSystemServiceIntegrationTest extends AbstractTest {
 	}
 
 	@Test
+	void testDeleteCodeSystemIncludingBranchesAllowsRecreation() throws ServiceException {
+		CodeSystem extension = new CodeSystem("SNOMEDCT-EXP", "MAIN/SNOMEDCT-EXP");
+		codeSystemService.createCodeSystem(extension);
+		codeSystemService.createVersion(extension, 20260131, "Test release");
+		String versionBranch = "MAIN/SNOMEDCT-EXP/2026-01-31";
+		assertTrue(branchService.exists(versionBranch));
+
+		codeSystemService.deleteCodeSystemAndVersions(extension, true);
+
+		assertNull(codeSystemService.find(extension.getShortName()));
+		assertFalse(branchService.exists(versionBranch));
+		assertFalse(branchService.exists(extension.getBranchPath()));
+		assertTrue(branchService.exists("MAIN"));
+		codeSystemService.createCodeSystem(new CodeSystem(extension.getShortName(), extension.getBranchPath()));
+		assertNotNull(codeSystemService.find(extension.getShortName()));
+	}
+
+	@Test
 	// We set up two versions of the international edition, 20180731 and 20190131, both on MAIN.
 	// We import an extension directly under MAIN at the timepoint when 20180731 was created.
 	// We then upgrade the extension to international version 20190131 which contains concept 18736003 that has been donated from the extension.

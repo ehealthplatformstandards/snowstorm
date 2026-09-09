@@ -58,7 +58,10 @@ ENV PUPPETEER_CACHE_DIR=$APP_HOME/.cache/puppeteer
 # HAPI_FHIR #
 #############
 WORKDIR $HAPI_FHIR
-RUN curl -fsSL $(curl -s https://api.github.com/repos/hapifhir/hapi-fhir/releases/latest | jq -r '.assets[] | select(.name | endswith("cli.zip")).browser_download_url') -o hapi-fhir-cli.zip && \
+# Match Snowstorm's HAPI version and its $upload-external-code-system operation.
+# Newer CLIs use staging-job operations that Snowstorm does not implement.
+ARG HAPI_FHIR_CLI_VERSION=7.6.0
+RUN curl -fsSL "https://github.com/hapifhir/hapi-fhir/releases/download/v${HAPI_FHIR_CLI_VERSION}/hapi-fhir-${HAPI_FHIR_CLI_VERSION}-cli.zip" -o hapi-fhir-cli.zip && \
     unzip hapi-fhir-cli.zip && \
     rm hapi-fhir-cli.zip
 

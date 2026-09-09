@@ -7,12 +7,10 @@ import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.config.Config;
 import org.snomed.snowstorm.core.data.domain.CodeSystem;
 import org.snomed.snowstorm.core.data.domain.QueryConcept;
-import org.snomed.snowstorm.core.data.services.CodeSystemService;
-import org.snomed.snowstorm.core.data.services.CodeSystemVersionService;
-import org.snomed.snowstorm.core.data.services.ReferenceSetMemberService;
-import org.snomed.snowstorm.core.data.services.StartupException;
+import org.snomed.snowstorm.core.data.services.*;
 import org.snomed.snowstorm.core.rf2.RF2Type;
 import org.snomed.snowstorm.core.rf2.rf2import.ImportService;
+import org.snomed.snowstorm.syndication.services.ImportTerminologyService;
 import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
@@ -39,6 +37,7 @@ public class SnowstormApplication extends Config implements ApplicationRunner {
 	private static final String DELETE_INDICES_FLAG = "delete-indices";
 	private static final String IMPORT_ARG = "import";
 	private static final String IMPORT_FULL_ARG = "import-full";
+	private static final String SYNDICATION = "syndication";
 	private static final String EXIT = "exit";
 
 	@Autowired
@@ -55,6 +54,9 @@ public class SnowstormApplication extends Config implements ApplicationRunner {
 
 	@Autowired
 	private CodeSystemVersionService codeSystemVersionService;
+
+	@Autowired
+	private ImportTerminologyService importTerminologyService;
 
 	private static final Logger logger = LoggerFactory.getLogger(SnowstormApplication.class);
 
@@ -78,7 +80,7 @@ public class SnowstormApplication extends Config implements ApplicationRunner {
 	}
 
 	@Override
-	public void run(ApplicationArguments applicationArguments) throws InterruptedException {
+	public void run(ApplicationArguments applicationArguments) throws InterruptedException, IOException, ServiceException {
 		try {
 			boolean deleteIndices = applicationArguments.containsOption(DELETE_INDICES_FLAG);
 			if (deleteIndices) {
@@ -114,6 +116,8 @@ public class SnowstormApplication extends Config implements ApplicationRunner {
 				fileExistsForArgument(releasePath, IMPORT_FULL_ARG);
 
 				importEditionRF2FromDisk(releasePath, RF2Type.FULL);
+			} else if (applicationArguments.containsOption(SYNDICATION)) {
+				importTerminologyService.handleStartupSyndication(applicationArguments);
 			}
 			if (applicationArguments.containsOption(EXIT)) {
 				logger.info("Exiting application.");
